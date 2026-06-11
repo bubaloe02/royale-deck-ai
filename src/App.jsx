@@ -336,7 +336,7 @@ function DeckCardSlot({card,onRemove}){
   const glowShadow=isChampion?"0 0 8px rgba(255,111,0,0.3)":isEvo?"0 0 8px rgba(0,229,255,0.3)":"none";
   return(
     <div onClick={onRemove} style={{aspectRatio:"3/4",background:`linear-gradient(145deg,${col}25,${col}08)`,border:`2px solid ${borderCol}`,borderRadius:8,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",cursor:"pointer",padding:3,gap:2,position:"relative",boxShadow:glowShadow}}>
-      {card.iconUrls?.medium?<img src={card.iconUrls.medium} alt={card.name} style={{width:"70%",objectFit:"contain"}} onError={e=>{e.target.style.display="none"}}/>:<div style={{fontSize:18}}>{isChampion?"👑":TYPE_ICONS[card.type?.toLowerCase()]||"🃏"}</div>}
+      {(card.evolutionLevel>0&&card.iconUrls?.evolutionMedium)||card.iconUrls?.medium?<img src={(card.evolutionLevel>0&&card.iconUrls?.evolutionMedium)||card.iconUrls?.medium} alt={card.name} style={{width:"70%",objectFit:"contain"}} onError={e=>{e.target.style.display="none"}}/>:<div style={{fontSize:18}}>{isChampion?"👑":TYPE_ICONS[card.type?.toLowerCase()]||"🃏"}</div>}
       <div style={{fontSize:7,color:isChampion?"#ff9a40":col,fontWeight:700,textAlign:"center",lineHeight:1.1,wordBreak:"break-word",width:"100%"}}>{card.name}</div>
       <ElixirBadge value={card.elixirCost||"?"}/>
       {card.evolutionLevel>0&&<div style={{position:"absolute",top:2,left:2,fontSize:7,color:"#00e5ff",fontWeight:800,background:"rgba(0,0,0,0.7)",borderRadius:2,padding:"0 2px"}}>EVO{card.evolutionLevel}</div>}
@@ -462,7 +462,7 @@ function DeckOption({deckData,explanation,allCards,onSelect,index,isAIGenerated}
           const evoInfo=card?.evolutionLevel>0?EVO_TIERS[card.name]:null;
           return(
             <div key={i} style={{aspectRatio:"3/4",background:card?`linear-gradient(145deg,${rcol}20,${rcol}08)`:"rgba(255,50,50,0.1)",border:`1.5px solid ${card?isChamp?"#ff6f00":rcol+"55":"rgba(255,50,50,0.3)"}`,borderRadius:8,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:3,gap:1,position:"relative",boxShadow:isChamp?"0 0 6px rgba(255,111,0,0.2)":"none"}}>
-              {card?.iconUrls?.medium?<img src={card.iconUrls.medium} alt={card.name} style={{width:"78%",objectFit:"contain"}} onError={e=>{e.target.style.display="none"}}/>:<div style={{fontSize:14}}>{card?(isChamp?"👑":TYPE_ICONS[card.type?.toLowerCase()]||"🃏"):"❌"}</div>}
+              {(card?.evolutionLevel>0&&card?.iconUrls?.evolutionMedium)||card?.iconUrls?.medium?<img src={(card?.evolutionLevel>0&&card?.iconUrls?.evolutionMedium)||card?.iconUrls?.medium} alt={card.name} style={{width:"78%",objectFit:"contain"}} onError={e=>{e.target.style.display="none"}}/>:<div style={{fontSize:14}}>{card?(isChamp?"👑":TYPE_ICONS[card.type?.toLowerCase()]||"🃏"):"❌"}</div>}
               <div style={{fontSize:6,color:card?(isChamp?"#ff9a40":rcol):"#ff5252",fontWeight:700,textAlign:"center",lineHeight:1.1,wordBreak:"break-word",width:"100%"}}>{cardName}</div>
               {card&&<div style={{fontSize:6,color:lfm<=1?"#4caf50":lfm<=3?"#ffd700":"#ff5252",fontWeight:700}}>L{card.level}</div>}
               {card?.evolutionLevel>0&&<div style={{position:"absolute",top:1,right:1,fontSize:6,color:"#00e5ff",fontWeight:800,background:"rgba(0,0,0,0.7)",borderRadius:2,padding:"0 1px"}}>E{card.evolutionLevel}</div>}
