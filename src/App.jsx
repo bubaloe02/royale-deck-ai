@@ -331,8 +331,11 @@ function DeckCardSlot({card,onRemove}){
   if(!card) return <div style={{aspectRatio:"3/4",border:"2px dashed rgba(255,255,255,0.08)",borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",color:"rgba(255,255,255,0.12)",fontSize:20}}>+</div>;
   const col=RARITY_COLORS[card.rarity?.toLowerCase()]||"#888";
   const isChampion=card.rarity?.toLowerCase()==="champion";
+  const isEvo=card.evolutionLevel>0;
+  const borderCol=isChampion?"#ff6f00":isEvo?"rgba(0,229,255,0.6)":col+"66";
+  const glowShadow=isChampion?"0 0 8px rgba(255,111,0,0.3)":isEvo?"0 0 8px rgba(0,229,255,0.3)":"none";
   return(
-    <div onClick={onRemove} style={{aspectRatio:"3/4",background:`linear-gradient(145deg,${col}25,${col}08)`,border:`2px solid ${isChampion?"#ff6f00":col+"66"}`,borderRadius:8,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",cursor:"pointer",padding:3,gap:2,position:"relative",boxShadow:isChampion?"0 0 8px rgba(255,111,0,0.3)":"none"}}>
+    <div onClick={onRemove} style={{aspectRatio:"3/4",background:`linear-gradient(145deg,${col}25,${col}08)`,border:`2px solid ${borderCol}`,borderRadius:8,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",cursor:"pointer",padding:3,gap:2,position:"relative",boxShadow:glowShadow}}>
       {card.iconUrls?.medium?<img src={card.iconUrls.medium} alt={card.name} style={{width:"70%",objectFit:"contain"}} onError={e=>{e.target.style.display="none"}}/>:<div style={{fontSize:18}}>{isChampion?"👑":TYPE_ICONS[card.type?.toLowerCase()]||"🃏"}</div>}
       <div style={{fontSize:7,color:isChampion?"#ff9a40":col,fontWeight:700,textAlign:"center",lineHeight:1.1,wordBreak:"break-word",width:"100%"}}>{card.name}</div>
       <ElixirBadge value={card.elixirCost||"?"}/>
