@@ -214,7 +214,7 @@ async function fetchDecks(playerData, cards, battleStats) {
   if(currentDeckCards.length===8){
     const cardMap={};
     cards.forEach(c=>{cardMap[c.name.toLowerCase()]=c;});
-    const activeEvoNames=new Set(currentDeckCards.filter(c=>(c.evolutionLevel||0)>0||c.iconUrls?.evolutionMedium).map(c=>c.name.toLowerCase()));
+    const activeEvoNames=new Set(currentDeckCards.filter(c=>(c.evolutionLevel||0)>0||c.iconUrls?.evolutionMedium).slice(0,2).map(c=>c.name.toLowerCase()));
     const dc=currentDeckCards.map(c=>{
       const base=cardMap[c.name.toLowerCase()]||c;
       return {...base,evolutionLevel:activeEvoNames.has(c.name.toLowerCase())?(c.evolutionLevel||1):0};
