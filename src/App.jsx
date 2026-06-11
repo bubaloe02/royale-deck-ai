@@ -135,13 +135,14 @@ function scoreCard(card) {
   let s = diff<=1?10:diff<=3?6:1;
   if (card.evolutionLevel>0) { const e=EVO_TIERS[card.name]; s+=e?e.bonus:15; }
   if (isChampionCard(card)) s+=8;
+  if (card.iconUrls?.heroMedium) s+=15;
   return s;
 }
 
 function scoreDeckLocal(cards) {
   const level = cards.reduce((sum,c)=>{ const d=(c.maxLevel||14)-(c.level||1); return sum+(d<=1?10:d<=3?6:1); },0);
   const evo = cards.reduce((sum,c)=>{ if(c.evolutionLevel>0){const e=EVO_TIERS[c.name];return sum+(e?e.bonus:15);}return sum; },0);
-  const hero = cards.reduce((sum,c)=>isChampionCard(c)?sum+8:sum,0);
+  const hero = cards.reduce((sum,c)=>{const b=isChampionCard(c)?8:0;return sum+b+(c.iconUrls?.heroMedium?15:0);},0);
   let synergy=0;
   cards.forEach(c=>{ const l=SYNERGIES[c.name]; if(!l) return; cards.forEach(o=>{if(l[o.name])synergy+=l[o.name];}); });
   synergy=Math.min(synergy,60);
@@ -316,15 +317,19 @@ function ElixirBadge({value}){
 function CardTile({card,selected,onClick}){
   const col=RARITY_COLORS[card.rarity?.toLowerCase()]||"#888";
   const isChampion=isChampionCard(card);
+  const isHero=!!card.iconUrls?.heroMedium;
   const evoInfo=card.evolutionLevel>0?EVO_TIERS[card.name]:null;
+  const borderCol=selected?col:isHero?"#FFD700":isChampion?"rgba(255,111,0,0.3)":"rgba(255,255,255,0.08)";
+  const shadow=selected?`0 0 14px ${col}55`:isHero?"0 0 8px rgba(255,215,0,0.3)":isChampion?"0 0 8px rgba(255,111,0,0.2)":"none";
+  const imgSrc=isHero?card.iconUrls.heroMedium:(card.evolutionLevel>0&&card.iconUrls?.evolutionMedium?card.iconUrls.evolutionMedium:card.iconUrls?.medium);
   return(
-    <div onClick={onClick} style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,padding:"8px 4px",background:selected?`${col}25`:"rgba(255,255,255,0.04)",border:`2px solid ${selected?col:isChampion?"rgba(255,111,0,0.3)":"rgba(255,255,255,0.08)"}`,borderRadius:10,cursor:"pointer",transition:"all 0.15s",boxShadow:selected?`0 0 14px ${col}55`:isChampion?"0 0 8px rgba(255,111,0,0.2)":"none",position:"relative",minHeight:80}}>
-      {card.iconUrls?.medium||card.iconUrls?.evolutionMedium?<img src={card.evolutionLevel>0&&card.iconUrls?.evolutionMedium?card.iconUrls.evolutionMedium:card.iconUrls?.medium} alt={card.name} style={{width:44,height:44,objectFit:"contain"}} onError={e=>{e.target.style.display="none"}}/>:<div style={{fontSize:22}}>{isChampion?"👑":TYPE_ICONS[card.type?.toLowerCase()]||"🃏"}</div>}
-      <div style={{fontSize:9,color:selected?col:isChampion?"#ff9a40":"#666",fontWeight:selected||isChampion?700:400,textAlign:"center",lineHeight:1.2,wordBreak:"break-word",width:"100%"}}>{card.name}</div>
+    <div onClick={onClick} style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,padding:"8px 4px",background:selected?`${col}25`:"rgba(255,255,255,0.04)",border:`2px solid ${borderCol}`,borderRadius:10,cursor:"pointer",transition:"all 0.15s",boxShadow:shadow,position:"relative",minHeight:80}}>
+      {imgSrc?<img src={imgSrc} alt={card.name} style={{width:44,height:44,objectFit:"contain"}} onError={e=>{e.target.style.display="none"}}/>:<div style={{fontSize:22}}>{isHero?"⚔️":isChampion?"👑":TYPE_ICONS[card.type?.toLowerCase()]||"🃏"}</div>}
+      <div style={{fontSize:9,color:selected?col:isHero?"#FFD700":isChampion?"#ff9a40":"#666",fontWeight:selected||isHero||isChampion?700:400,textAlign:"center",lineHeight:1.2,wordBreak:"break-word",width:"100%"}}>{card.name}</div>
       <div style={{position:"absolute",top:4,left:4}}><ElixirBadge value={card.elixirCost||"?"}/></div>
       {card.level&&<div style={{position:"absolute",top:4,right:4,fontSize:8,background:"rgba(0,0,0,0.8)",borderRadius:3,padding:"1px 3px",color:"#ffd700",fontWeight:700}}>L{card.level}</div>}
       {card.evolutionLevel>0&&<div style={{position:"absolute",bottom:20,right:3,fontSize:7,color:"#00e5ff",fontWeight:800,background:"rgba(0,229,255,0.1)",borderRadius:2,padding:"0 2px"}}>EVO{card.evolutionLevel}</div>}
-      {isChampion&&<div style={{position:"absolute",bottom:20,left:3,fontSize:7,color:"#ff9a40",fontWeight:800}}>👑</div>}
+      {isHero?<div style={{position:"absolute",bottom:20,left:3,fontSize:7,color:"#FFD700",fontWeight:800,background:"rgba(255,215,0,0.15)",borderRadius:2,padding:"0 2px"}}>⚔️HERO</div>:isChampion&&<div style={{position:"absolute",bottom:20,left:3,fontSize:7,color:"#ff9a40",fontWeight:800}}>👑</div>}
       {evoInfo&&<div style={{position:"absolute",bottom:0,left:0,right:0,fontSize:6,color:evoInfo.tier==="S+"?"#ffd700":evoInfo.tier==="S"?"#ff9800":"#4caf50",fontWeight:800,textAlign:"center",background:"rgba(0,0,0,0.6)",borderRadius:"0 0 8px 8px",padding:"1px 0"}}>{evoInfo.tier}</div>}
     </div>
   );
@@ -334,16 +339,18 @@ function DeckCardSlot({card,onRemove}){
   if(!card) return <div style={{aspectRatio:"3/4",border:"2px dashed rgba(255,255,255,0.08)",borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",color:"rgba(255,255,255,0.12)",fontSize:20}}>+</div>;
   const col=RARITY_COLORS[card.rarity?.toLowerCase()]||"#888";
   const isChampion=isChampionCard(card);
+  const isHero=!!card.iconUrls?.heroMedium;
   const isEvo=card.evolutionLevel>0;
-  const borderCol=isChampion?"#ff6f00":isEvo?"rgba(0,229,255,0.6)":col+"66";
-  const glowShadow=isChampion?"0 0 8px rgba(255,111,0,0.3)":isEvo?"0 0 8px rgba(0,229,255,0.3)":"none";
+  const borderCol=isHero?"#FFD700":isChampion?"#ff6f00":isEvo?"rgba(0,229,255,0.6)":col+"66";
+  const glowShadow=isHero?"0 0 8px rgba(255,215,0,0.3)":isChampion?"0 0 8px rgba(255,111,0,0.3)":isEvo?"0 0 8px rgba(0,229,255,0.3)":"none";
+  const imgSrc=isHero?card.iconUrls.heroMedium:(isEvo&&card.iconUrls?.evolutionMedium?card.iconUrls.evolutionMedium:card.iconUrls?.medium);
   return(
     <div onClick={onRemove} style={{aspectRatio:"3/4",background:`linear-gradient(145deg,${col}25,${col}08)`,border:`2px solid ${borderCol}`,borderRadius:8,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",cursor:"pointer",padding:3,gap:2,position:"relative",boxShadow:glowShadow}}>
-      {card.iconUrls?.medium||card.iconUrls?.evolutionMedium?<img src={card.evolutionLevel>0&&card.iconUrls?.evolutionMedium?card.iconUrls.evolutionMedium:card.iconUrls?.medium} alt={card.name} style={{width:"70%",objectFit:"contain"}} onError={e=>{e.target.style.display="none"}}/>:<div style={{fontSize:18}}>{isChampion?"👑":TYPE_ICONS[card.type?.toLowerCase()]||"🃏"}</div>}
-      <div style={{fontSize:7,color:isChampion?"#ff9a40":col,fontWeight:700,textAlign:"center",lineHeight:1.1,wordBreak:"break-word",width:"100%"}}>{card.name}</div>
+      {imgSrc?<img src={imgSrc} alt={card.name} style={{width:"70%",objectFit:"contain"}} onError={e=>{e.target.style.display="none"}}/>:<div style={{fontSize:18}}>{isHero?"⚔️":isChampion?"👑":TYPE_ICONS[card.type?.toLowerCase()]||"🃏"}</div>}
+      <div style={{fontSize:7,color:isHero?"#FFD700":isChampion?"#ff9a40":col,fontWeight:700,textAlign:"center",lineHeight:1.1,wordBreak:"break-word",width:"100%"}}>{card.name}</div>
       <ElixirBadge value={card.elixirCost||"?"}/>
-      {card.evolutionLevel>0&&<div style={{position:"absolute",top:2,left:2,fontSize:7,color:"#00e5ff",fontWeight:800,background:"rgba(0,0,0,0.7)",borderRadius:2,padding:"0 2px"}}>EVO{card.evolutionLevel}</div>}
-      {isChampion&&<div style={{position:"absolute",top:2,right:2,fontSize:8}}>👑</div>}
+      {isEvo&&<div style={{position:"absolute",top:2,left:2,fontSize:7,color:"#00e5ff",fontWeight:800,background:"rgba(0,0,0,0.7)",borderRadius:2,padding:"0 2px"}}>EVO{card.evolutionLevel}</div>}
+      {isHero?<div style={{position:"absolute",top:2,right:2,fontSize:7,color:"#FFD700",fontWeight:800,background:"rgba(255,215,0,0.15)",borderRadius:2,padding:"0 2px"}}>⚔️</div>:isChampion&&<div style={{position:"absolute",top:2,right:2,fontSize:8}}>👑</div>}
       <div style={{position:"absolute",bottom:2,right:2,color:"rgba(255,255,255,0.2)",fontSize:9}}>✕</div>
     </div>
   );
@@ -462,14 +469,16 @@ function DeckOption({deckData,explanation,allCards,onSelect,index,isAIGenerated}
           const rcol=card?(RARITY_COLORS[card.rarity?.toLowerCase()]||"#888"):"#444";
           const lfm=card?(card.maxLevel||14)-(card.level||1):99;
           const isChamp=isChampionCard(card);
+          const isHeroCard=!!card?.iconUrls?.heroMedium;
           const evoInfo=card?.evolutionLevel>0?EVO_TIERS[card.name]:null;
+          const cardImgSrc=isHeroCard?card.iconUrls.heroMedium:(card?.evolutionLevel>0&&card?.iconUrls?.evolutionMedium?card.iconUrls.evolutionMedium:card?.iconUrls?.medium);
           return(
-            <div key={i} style={{aspectRatio:"3/4",background:card?`linear-gradient(145deg,${rcol}20,${rcol}08)`:"rgba(255,50,50,0.1)",border:`1.5px solid ${card?isChamp?"#ff6f00":rcol+"55":"rgba(255,50,50,0.3)"}`,borderRadius:8,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:3,gap:1,position:"relative",boxShadow:isChamp?"0 0 6px rgba(255,111,0,0.2)":"none"}}>
-              {card?.iconUrls?.medium||card?.iconUrls?.evolutionMedium?<img src={card?.evolutionLevel>0&&card?.iconUrls?.evolutionMedium?card.iconUrls.evolutionMedium:card?.iconUrls?.medium} alt={card.name} style={{width:"78%",objectFit:"contain"}} onError={e=>{e.target.style.display="none"}}/>:<div style={{fontSize:14}}>{card?(isChamp?"👑":TYPE_ICONS[card.type?.toLowerCase()]||"🃏"):"❌"}</div>}
-              <div style={{fontSize:6,color:card?(isChamp?"#ff9a40":rcol):"#ff5252",fontWeight:700,textAlign:"center",lineHeight:1.1,wordBreak:"break-word",width:"100%"}}>{cardName}</div>
+            <div key={i} style={{aspectRatio:"3/4",background:card?`linear-gradient(145deg,${rcol}20,${rcol}08)`:"rgba(255,50,50,0.1)",border:`1.5px solid ${card?isHeroCard?"#FFD700":isChamp?"#ff6f00":rcol+"55":"rgba(255,50,50,0.3)"}`,borderRadius:8,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:3,gap:1,position:"relative",boxShadow:isHeroCard?"0 0 6px rgba(255,215,0,0.2)":isChamp?"0 0 6px rgba(255,111,0,0.2)":"none"}}>
+              {cardImgSrc?<img src={cardImgSrc} alt={card.name} style={{width:"78%",objectFit:"contain"}} onError={e=>{e.target.style.display="none"}}/>:<div style={{fontSize:14}}>{card?(isHeroCard?"⚔️":isChamp?"👑":TYPE_ICONS[card.type?.toLowerCase()]||"🃏"):"❌"}</div>}
+              <div style={{fontSize:6,color:card?(isHeroCard?"#FFD700":isChamp?"#ff9a40":rcol):"#ff5252",fontWeight:700,textAlign:"center",lineHeight:1.1,wordBreak:"break-word",width:"100%"}}>{cardName}</div>
               {card&&<div style={{fontSize:6,color:lfm<=1?"#4caf50":lfm<=3?"#ffd700":"#ff5252",fontWeight:700}}>L{card.level}</div>}
               {card?.evolutionLevel>0&&<div style={{position:"absolute",top:1,right:1,fontSize:6,color:"#00e5ff",fontWeight:800,background:"rgba(0,0,0,0.7)",borderRadius:2,padding:"0 1px"}}>E{card.evolutionLevel}</div>}
-              {isChamp&&<div style={{position:"absolute",top:1,left:1,fontSize:7}}>👑</div>}
+              {isHeroCard?<div style={{position:"absolute",top:1,left:1,fontSize:6,color:"#FFD700",fontWeight:800}}>⚔️</div>:isChamp&&<div style={{position:"absolute",top:1,left:1,fontSize:7}}>👑</div>}
               {evoInfo&&<div style={{position:"absolute",bottom:0,left:0,right:0,fontSize:5,color:evoInfo.tier==="S+"?"#ffd700":"#4caf50",fontWeight:800,textAlign:"center",background:"rgba(0,0,0,0.7)",borderRadius:"0 0 6px 6px"}}>{evoInfo.tier}</div>}
             </div>
           );
@@ -665,9 +674,9 @@ export default function App(){
   const filtered=allCards.filter(c=>{
     const ms=c.name.toLowerCase().includes(search.toLowerCase());
     const mt=filterType==="all"||
-      (filterType==="champion"&&isChampionCard(c))||
+      (filterType==="hero"&&!!c.iconUrls?.heroMedium)||
       (filterType==="evo"&&c.evolutionLevel>0)||
-      (filterType!=="champion"&&filterType!=="evo"&&c.type?.toLowerCase()===filterType);
+      (filterType!=="hero"&&filterType!=="evo"&&c.type?.toLowerCase()===filterType);
     return ms&&mt;
   });
 
@@ -832,8 +841,8 @@ export default function App(){
               <input value={search} onChange={e=>setSearch(e.target.value)} placeholder={player?"Search cards...":"Link account first"} disabled={!player}
                 style={{width:"100%",background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.07)",borderRadius:8,padding:"8px 12px",color:"#ddd",fontFamily:"'Rajdhani',sans-serif",fontSize:13,outline:"none",marginBottom:6}}/>
               <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
-                {["all","champion","evo","troop","spell","building"].map(t=>(
-                  <button key={t} onClick={()=>setFilterType(t)} style={{padding:"3px 8px",background:filterType===t?"rgba(255,111,0,0.14)":"transparent",border:`1px solid ${filterType===t?"#ff6f00":"rgba(255,255,255,0.06)"}`,borderRadius:5,color:filterType===t?"#ff6f00":"#333",cursor:"pointer",fontSize:10,fontFamily:"'Rajdhani',sans-serif",fontWeight:700,textTransform:"uppercase"}}>{t==="champion"?"👑 HERO":t==="evo"?"⚡ EVO":t.toUpperCase()}</button>
+                {["all","hero","evo","troop","spell","building"].map(t=>(
+                  <button key={t} onClick={()=>setFilterType(t)} style={{padding:"3px 8px",background:filterType===t?"rgba(255,111,0,0.14)":"transparent",border:`1px solid ${filterType===t?"#ff6f00":"rgba(255,255,255,0.06)"}`,borderRadius:5,color:filterType===t?"#ff6f00":"#333",cursor:"pointer",fontSize:10,fontFamily:"'Rajdhani',sans-serif",fontWeight:700,textTransform:"uppercase"}}>{t==="hero"?"⚔️ HERO":t==="evo"?"⚡ EVO":t.toUpperCase()}</button>
                 ))}
               </div>
             </div>
