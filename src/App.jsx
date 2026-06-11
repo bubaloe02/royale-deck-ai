@@ -212,25 +212,28 @@ async function fetchDecks(playerData, cards, battleStats) {
   const currentDeckCards=playerData.currentDeck||[];
   let currentDeckOption=null;
   if(currentDeckCards.length===8){
-    const cardMap={};
-    cards.forEach(c=>{cardMap[c.name.toLowerCase()]=c;});
-    const activeEvoNames=new Set(currentDeckCards.filter(c=>(c.evolutionLevel||0)>0||c.iconUrls?.evolutionMedium).slice(0,2).map(c=>c.name.toLowerCase()));
-    const dc=currentDeckCards.map(c=>{
-      const base=cardMap[c.name.toLowerCase()]||c;
-      return {...base,evolutionLevel:activeEvoNames.has(c.name.toLowerCase())?(c.evolutionLevel||1):0};
-    });
+    const heroCard=currentDeckCards.find(c=>c.iconUrls?.heroMedium);
+    const evoCards=currentDeckCards.filter(c=>c.evolutionLevel>0&&!c.iconUrls?.heroMedium).slice(0,2);
+    const activeSpecialNames=new Set([heroCard?.name,...evoCards.map(c=>c.name)].filter(Boolean));
+
+    const dc=currentDeckCards.map(c=>({
+      ...c,
+      evolutionLevel:activeSpecialNames.has(c.name)?c.evolutionLevel:0,
+      iconUrls:activeSpecialNames.has(c.name)?c.iconUrls:{medium:c.iconUrls?.medium},
+    }));
+
+    const evosUsed=evoCards.map(c=>c.name);
+    const hero=heroCard?.name||null;
+
     const pr=scoreDeckLocal(dc);
     const archetype=guessArchetype(currentDeckCards.map(c=>c.name));
     const personalWR=battleStats[archetype];
-    const evosInDeck=dc.filter(c=>c.evolutionLevel>0);
-    const heroInDeck=dc.find(c=>!!c.iconUrls?.heroMedium||isChampionCard(c));
     currentDeckOption={
       name:"Your Current Deck",archetype,tier:getTier(pr),metaScore:95,
       cards:currentDeckCards.map(c=>c.name),deckCards:dc,
       powerRating:Math.min(100,pr+5),winRate:null,battles:null,
       matchType:"current",isCurrentDeck:true,
-      evosUsed:evosInDeck.map(c=>c.name),
-      hero:heroInDeck?.name||null,
+      evosUsed,hero,
       personalWR:personalWR?Math.round(personalWR.wins/(personalWR.wins+personalWR.losses)*100):null,
       personalBattles:personalWR?personalWR.wins+personalWR.losses:null,
     };
