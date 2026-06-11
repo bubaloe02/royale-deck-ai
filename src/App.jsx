@@ -583,6 +583,7 @@ export default function App(){
       setAllCards(cards);
       console.log("[DEBUG] first 5 cards:", cards.slice(0,5).map(c=>({name:c.name,rarity:c.rarity,type:c.type,evolutionLevel:c.evolutionLevel})));
       console.log("Card types:", [...new Set(cards.map(c => c.rarity))]);
+      console.log("[DEBUG] currentDeck:", JSON.stringify(data.currentDeck));
       setDeck([]);setDeckOptions([]);setExplanations([]);setAiDecks([]);setAiExplanations([]);
 
       setFetchStatus("Analyzing battle history...");
