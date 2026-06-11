@@ -214,10 +214,10 @@ async function fetchDecks(playerData, cards, battleStats) {
   if(currentDeckCards.length===8){
     const cardMap={};
     cards.forEach(c=>{cardMap[c.name.toLowerCase()]=c;});
-    const activeEvoNames=new Set(currentDeckCards.filter(c=>c.evolutionLevel>0).map(c=>c.name.toLowerCase()));
+    const activeEvoNames=new Set(currentDeckCards.filter(c=>(c.evolutionLevel||0)>0||c.iconUrls?.evolutionMedium).map(c=>c.name.toLowerCase()));
     const dc=currentDeckCards.map(c=>{
       const base=cardMap[c.name.toLowerCase()]||c;
-      return {...base,evolutionLevel:activeEvoNames.has(c.name.toLowerCase())?c.evolutionLevel:0};
+      return {...base,evolutionLevel:activeEvoNames.has(c.name.toLowerCase())?(c.evolutionLevel||1):0};
     });
     const pr=scoreDeckLocal(dc);
     const archetype=guessArchetype(currentDeckCards.map(c=>c.name));
@@ -564,6 +564,7 @@ export default function App(){
   const [fetchStatus,setFetchStatus]=useState("");
   const [error,setError]=useState("");
   const [decksView,setDecksView]=useState("live");
+  const [supportCard,setSupportCard]=useState(null);
   const chatEnd=useRef(null);
   const scrollBottom=()=>setTimeout(()=>chatEnd.current?.scrollIntoView({behavior:"smooth"}),50);
 
@@ -584,6 +585,7 @@ export default function App(){
       console.log("[DEBUG] first 5 cards:", cards.slice(0,5).map(c=>({name:c.name,rarity:c.rarity,type:c.type,evolutionLevel:c.evolutionLevel})));
       console.log("Card types:", [...new Set(cards.map(c => c.rarity))]);
       console.log("[DEBUG] currentDeck:", JSON.stringify(data.currentDeck));
+      setSupportCard(data.currentDeckSupportCards?.[0]||null);
       setDeck([]);setDeckOptions([]);setExplanations([]);setAiDecks([]);setAiExplanations([]);
 
       setFetchStatus("Analyzing battle history...");
@@ -718,7 +720,7 @@ export default function App(){
               <div style={{fontSize:12,fontWeight:700,color:"#ff9a40",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:90}}>{player.name}</div>
               <div style={{fontSize:9,color:"#444"}}>{player.trophies?.toLocaleString()} 🏆</div>
             </div>
-            <button onClick={()=>{setPlayer(null);setAllCards([]);setDeck([]);setDeckOptions([]);setExplanations([]);setBattleStats({});setAiDecks([]);setAiExplanations([]);setTagInput("");setTab("home");}} style={{background:"rgba(255,50,50,0.1)",border:"1px solid rgba(255,50,50,0.2)",borderRadius:4,color:"#ff5252",fontSize:9,cursor:"pointer",padding:"2px 6px",fontFamily:"'Rajdhani',sans-serif",fontWeight:700}}>✕</button>
+            <button onClick={()=>{setPlayer(null);setAllCards([]);setDeck([]);setDeckOptions([]);setExplanations([]);setBattleStats({});setAiDecks([]);setAiExplanations([]);setTagInput("");setTab("home");setSupportCard(null);}} style={{background:"rgba(255,50,50,0.1)",border:"1px solid rgba(255,50,50,0.2)",borderRadius:4,color:"#ff5252",fontSize:9,cursor:"pointer",padding:"2px 6px",fontFamily:"'Rajdhani',sans-serif",fontWeight:700}}>✕</button>
           </div>
         ):(
           <div style={{display:"flex",gap:6}}>
@@ -836,6 +838,20 @@ export default function App(){
               {deckHero&&(
                 <div style={{marginTop:6,padding:"5px 8px",background:"rgba(255,111,0,0.06)",border:"1px solid rgba(255,111,0,0.15)",borderRadius:6,fontSize:11,color:"#ff9a40"}}>
                   👑 {deckHero.name} — {HERO_SYNERGIES[deckHero.name]?.note||"hero card active"}
+                </div>
+              )}
+              {supportCard&&(
+                <div style={{marginTop:8,padding:"6px 0 2px"}}>
+                  <div style={{fontSize:9,color:"#555",fontWeight:700,textTransform:"uppercase",letterSpacing:1,marginBottom:5}}>🗼 TOWER SUPPORT</div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6}}>
+                    <div style={{aspectRatio:"3/4",background:"linear-gradient(145deg,rgba(192,192,192,0.12),rgba(192,192,192,0.04))",border:"2px solid #9e9e9e",borderRadius:8,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:3,gap:2,position:"relative",boxShadow:"0 0 8px rgba(192,192,192,0.12)"}}>
+                      {supportCard.iconUrls?.medium?<img src={supportCard.iconUrls.medium} alt={supportCard.name} style={{width:"70%",objectFit:"contain"}} onError={e=>{e.target.style.display="none"}}/>:<div style={{fontSize:18}}>🗼</div>}
+                      <div style={{fontSize:7,color:"#9e9e9e",fontWeight:700,textAlign:"center",lineHeight:1.1,wordBreak:"break-word",width:"100%"}}>{supportCard.name}</div>
+                      <ElixirBadge value={supportCard.elixirCost||"?"}/>
+                      {supportCard.level&&<div style={{position:"absolute",top:2,right:2,fontSize:7,background:"rgba(0,0,0,0.7)",borderRadius:2,padding:"0 2px",color:"#bdbdbd",fontWeight:700}}>L{supportCard.level}</div>}
+                      <div style={{position:"absolute",top:2,left:2,fontSize:7,color:"#9e9e9e",fontWeight:800,background:"rgba(158,158,158,0.15)",borderRadius:2,padding:"0 2px"}}>SUP</div>
+                    </div>
+                  </div>
                 </div>
               )}
               {deck.length===8&&(
