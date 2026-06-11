@@ -316,7 +316,7 @@ function CardTile({card,selected,onClick}){
   const evoInfo=card.evolutionLevel>0?EVO_TIERS[card.name]:null;
   return(
     <div onClick={onClick} style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,padding:"8px 4px",background:selected?`${col}25`:"rgba(255,255,255,0.04)",border:`2px solid ${selected?col:isChampion?"rgba(255,111,0,0.3)":"rgba(255,255,255,0.08)"}`,borderRadius:10,cursor:"pointer",transition:"all 0.15s",boxShadow:selected?`0 0 14px ${col}55`:isChampion?"0 0 8px rgba(255,111,0,0.2)":"none",position:"relative",minHeight:80}}>
-      {card.iconUrls?.medium?<img src={card.iconUrls.medium} alt={card.name} style={{width:44,height:44,objectFit:"contain"}} onError={e=>{e.target.style.display="none"}}/>:<div style={{fontSize:22}}>{isChampion?"👑":TYPE_ICONS[card.type?.toLowerCase()]||"🃏"}</div>}
+      {(card.evolutionLevel>0?card.iconUrls?.evolutionMedium:null)||card.iconUrls?.medium?<img src={(card.evolutionLevel>0&&card.iconUrls?.evolutionMedium)||card.iconUrls.medium} alt={card.name} style={{width:44,height:44,objectFit:"contain"}} onError={e=>{e.target.style.display="none"}}/>:<div style={{fontSize:22}}>{isChampion?"👑":TYPE_ICONS[card.type?.toLowerCase()]||"🃏"}</div>}
       <div style={{fontSize:9,color:selected?col:isChampion?"#ff9a40":"#666",fontWeight:selected||isChampion?700:400,textAlign:"center",lineHeight:1.2,wordBreak:"break-word",width:"100%"}}>{card.name}</div>
       <div style={{position:"absolute",top:4,left:4}}><ElixirBadge value={card.elixirCost||"?"}/></div>
       {card.level&&<div style={{position:"absolute",top:4,right:4,fontSize:8,background:"rgba(0,0,0,0.8)",borderRadius:3,padding:"1px 3px",color:"#ffd700",fontWeight:700}}>L{card.level}</div>}
@@ -660,7 +660,7 @@ export default function App(){
   const filtered=allCards.filter(c=>{
     const ms=c.name.toLowerCase().includes(search.toLowerCase());
     const mt=filterType==="all"||
-      (filterType==="champion"&&c.rarity?.toLowerCase()==="champion")||
+      (filterType==="champion"&&(c.rarity?.toLowerCase()==="champion"||["Golden Knight","Archer Queen","Skeleton King","Mighty Miner","Little Prince","Monk","Boss Bandit","Goblinstein"].includes(c.name)))||
       (filterType==="evo"&&c.evolutionLevel>0)||
       c.type?.toLowerCase()===filterType;
     return ms&&mt;
