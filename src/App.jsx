@@ -223,7 +223,7 @@ async function fetchDecks(playerData, cards, battleStats) {
     const archetype=guessArchetype(currentDeckCards.map(c=>c.name));
     const personalWR=battleStats[archetype];
     const evosInDeck=dc.filter(c=>c.evolutionLevel>0);
-    const heroInDeck=dc.find(c=>isChampionCard(c));
+    const heroInDeck=dc.find(c=>!!c.iconUrls?.heroMedium||isChampionCard(c));
     currentDeckOption={
       name:"Your Current Deck",archetype,tier:getTier(pr),metaScore:95,
       cards:currentDeckCards.map(c=>c.name),deckCards:dc,
@@ -422,7 +422,7 @@ function DeckOption({deckData,explanation,allCards,onSelect,index,isAIGenerated}
   const isLive=deckData.source==="live";
   const upgrades=explanation?.upgradePriority||[];
   const evosInDeck=deckData.deckCards?.filter(c=>c?.evolutionLevel>0)||[];
-  const heroInDeck=deckData.deckCards?.find(c=>isChampionCard(c))||(deckData.hero?{name:deckData.hero}:null);
+  const heroInDeck=deckData.deckCards?.find(c=>!!c.iconUrls?.heroMedium||isChampionCard(c))||(deckData.hero?{name:deckData.hero}:null);
 
   return(
     <div style={{background:isAIGenerated?"rgba(156,39,176,0.04)":isCurrentDeck?"rgba(0,229,255,0.04)":"rgba(255,255,255,0.025)",border:`1px solid ${col}${isCurrentDeck||isAIGenerated?"55":"33"}`,borderRadius:14,padding:16,marginBottom:16}}>
@@ -470,18 +470,19 @@ function DeckOption({deckData,explanation,allCards,onSelect,index,isAIGenerated}
       <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,marginBottom:12}}>
         {deckData.cards.map((cardName,i)=>{
           const card=allCards.find(c=>c.name.toLowerCase()===cardName.toLowerCase());
+          const activeEvoLevel=deckData.deckCards?.[i]?.evolutionLevel||0;
           const rcol=card?(RARITY_COLORS[card.rarity?.toLowerCase()]||"#888"):"#444";
           const lfm=card?(card.maxLevel||14)-(card.level||1):99;
           const isChamp=isChampionCard(card);
           const isHeroCard=!!card?.iconUrls?.heroMedium;
-          const evoInfo=card?.evolutionLevel>0?EVO_TIERS[card.name]:null;
-          const cardImgSrc=isHeroCard?card.iconUrls.heroMedium:(card?.evolutionLevel>0&&card?.iconUrls?.evolutionMedium?card.iconUrls.evolutionMedium:card?.iconUrls?.medium);
+          const evoInfo=activeEvoLevel>0?EVO_TIERS[card?.name]:null;
+          const cardImgSrc=isHeroCard?card.iconUrls.heroMedium:(activeEvoLevel>0&&card?.iconUrls?.evolutionMedium?card.iconUrls.evolutionMedium:card?.iconUrls?.medium);
           return(
-            <div key={i} style={{aspectRatio:"3/4",background:card?`linear-gradient(145deg,${rcol}20,${rcol}08)`:"rgba(255,50,50,0.1)",border:`1.5px solid ${card?isHeroCard?"#FFD700":isChamp?"#ff6f00":rcol+"55":"rgba(255,50,50,0.3)"}`,borderRadius:8,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:3,gap:1,position:"relative",boxShadow:isHeroCard?"0 0 6px rgba(255,215,0,0.2)":isChamp?"0 0 6px rgba(255,111,0,0.2)":"none"}}>
+            <div key={i} style={{aspectRatio:"3/4",background:card?`linear-gradient(145deg,${rcol}20,${rcol}08)`:"rgba(255,50,50,0.1)",border:`1.5px solid ${card?isHeroCard?"#FFD700":activeEvoLevel>0?"rgba(0,229,255,0.6)":isChamp?"#ff6f00":rcol+"55":"rgba(255,50,50,0.3)"}`,borderRadius:8,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:3,gap:1,position:"relative",boxShadow:isHeroCard?"0 0 6px rgba(255,215,0,0.2)":activeEvoLevel>0?"0 0 6px rgba(0,229,255,0.2)":isChamp?"0 0 6px rgba(255,111,0,0.2)":"none"}}>
               {cardImgSrc?<img src={cardImgSrc} alt={card.name} style={{width:"78%",objectFit:"contain"}} onError={e=>{e.target.style.display="none"}}/>:<div style={{fontSize:14}}>{card?(isHeroCard?"⚔️":isChamp?"👑":TYPE_ICONS[card.type?.toLowerCase()]||"🃏"):"❌"}</div>}
               <div style={{fontSize:6,color:card?(isHeroCard?"#FFD700":isChamp?"#ff9a40":rcol):"#ff5252",fontWeight:700,textAlign:"center",lineHeight:1.1,wordBreak:"break-word",width:"100%"}}>{cardName}</div>
               {card&&<div style={{fontSize:6,color:lfm<=1?"#4caf50":lfm<=3?"#ffd700":"#ff5252",fontWeight:700}}>L{card.level}</div>}
-              {card?.evolutionLevel>0&&<div style={{position:"absolute",top:1,right:1,fontSize:6,color:"#00e5ff",fontWeight:800,background:"rgba(0,0,0,0.7)",borderRadius:2,padding:"0 1px"}}>E{card.evolutionLevel}</div>}
+              {activeEvoLevel>0&&<div style={{position:"absolute",top:1,right:1,fontSize:6,color:"#00e5ff",fontWeight:800,background:"rgba(0,0,0,0.7)",borderRadius:2,padding:"0 1px"}}>E{activeEvoLevel}</div>}
               {isHeroCard?<div style={{position:"absolute",top:1,left:1,fontSize:6,color:"#FFD700",fontWeight:800}}>⚔️</div>:isChamp&&<div style={{position:"absolute",top:1,left:1,fontSize:7}}>👑</div>}
               {evoInfo&&<div style={{position:"absolute",bottom:0,left:0,right:0,fontSize:5,color:evoInfo.tier==="S+"?"#ffd700":"#4caf50",fontWeight:800,textAlign:"center",background:"rgba(0,0,0,0.7)",borderRadius:"0 0 6px 6px"}}>{evoInfo.tier}</div>}
             </div>
