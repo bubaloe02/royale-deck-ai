@@ -565,6 +565,7 @@ export default function App(){
       setPlayer(data);
       const cards=(data.cards||[]).sort((a,b)=>(a.elixirCost||0)-(b.elixirCost||0));
       setAllCards(cards);
+      console.log("[DEBUG] first 5 cards:", cards.slice(0,5).map(c=>({name:c.name,rarity:c.rarity,type:c.type,evolutionLevel:c.evolutionLevel})));
       setDeck([]);setDeckOptions([]);setExplanations([]);setAiDecks([]);setAiExplanations([]);
 
       setFetchStatus("Analyzing battle history...");
