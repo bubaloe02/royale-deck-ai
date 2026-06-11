@@ -89,6 +89,9 @@ const HERO_SYNERGIES = {
   "Goblinstein":    { archetypes:["Golem Beatdown","Giant Beatdown"], note:"Lightning ability powers up beatdown" },
 };
 
+const CHAMPION_NAMES = ["Golden Knight","Archer Queen","Skeleton King","Mighty Miner","Little Prince","Monk","Boss Bandit","Goblinstein"];
+const isChampionCard = (card) => card?.rarity?.toLowerCase()==="champion" || CHAMPION_NAMES.includes(card?.name);
+
 const EVO_TIERS = {
   "Firecracker":   { tier:"S+", bonus:30, note:"Splits on death — game changing" },
   "Mini P.E.K.K.A":{ tier:"S+", bonus:28, note:"Double strike — strongest troop EVO" },
@@ -131,14 +134,14 @@ function scoreCard(card) {
   const diff = (card.maxLevel||14)-(card.level||1);
   let s = diff<=1?10:diff<=3?6:1;
   if (card.evolutionLevel>0) { const e=EVO_TIERS[card.name]; s+=e?e.bonus:15; }
-  if (card.rarity?.toLowerCase()==="champion") s+=8;
+  if (isChampionCard(card)) s+=8;
   return s;
 }
 
 function scoreDeckLocal(cards) {
   const level = cards.reduce((sum,c)=>{ const d=(c.maxLevel||14)-(c.level||1); return sum+(d<=1?10:d<=3?6:1); },0);
   const evo = cards.reduce((sum,c)=>{ if(c.evolutionLevel>0){const e=EVO_TIERS[c.name];return sum+(e?e.bonus:15);}return sum; },0);
-  const hero = cards.reduce((sum,c)=>c.rarity?.toLowerCase()==="champion"?sum+8:sum,0);
+  const hero = cards.reduce((sum,c)=>isChampionCard(c)?sum+8:sum,0);
   let synergy=0;
   cards.forEach(c=>{ const l=SYNERGIES[c.name]; if(!l) return; cards.forEach(o=>{if(l[o.name])synergy+=l[o.name];}); });
   synergy=Math.min(synergy,60);
@@ -215,7 +218,7 @@ async function fetchDecks(playerData, cards, battleStats) {
     const archetype=guessArchetype(currentDeckCards.map(c=>c.name));
     const personalWR=battleStats[archetype];
     const evosInDeck=dc.filter(c=>c.evolutionLevel>0);
-    const heroInDeck=dc.find(c=>c.rarity?.toLowerCase()==="champion");
+    const heroInDeck=dc.find(c=>isChampionCard(c));
     currentDeckOption={
       name:"Your Current Deck",archetype,tier:getTier(pr),metaScore:95,
       cards:currentDeckCards.map(c=>c.name),deckCards:dc,
@@ -284,7 +287,7 @@ async function explainTopDecks(topDecks, playerData) {
     const bracketStr=d.bracket?`, Bracket:${d.bracket}`:"";
     return `Deck ${i+1}: ${d.name} (${d.archetype}, ${d.tier}, Power:${d.powerRating}/100${wrStr}${wilsonStr}${personalStr}${evoStr}${heroStr}${bracketStr})
 Cards: ${d.cards.join(", ")}
-Levels: ${d.deckCards?.map(c=>`${c.name} L${c.level||"?"}/${c.maxLevel||14}${c.evolutionLevel>0?` EVO${c.evolutionLevel}`:""}${c.rarity?.toLowerCase()==="champion"?" HERO":""}`).join(", ")}`;
+Levels: ${d.deckCards?.map(c=>`${c.name} L${c.level||"?"}/${c.maxLevel||14}${c.evolutionLevel>0?` EVO${c.evolutionLevel}`:""}${isChampionCard(c)?" HERO":""}`).join(", ")}`;
   }).join("\n\n");
 
   const prompt=`Player: ${playerData.name} | Trophies: ${playerData.trophies} | Arena: ${playerData.arena?.name} | King Level: ${playerData.expLevel}
@@ -312,7 +315,7 @@ function ElixirBadge({value}){
 
 function CardTile({card,selected,onClick}){
   const col=RARITY_COLORS[card.rarity?.toLowerCase()]||"#888";
-  const isChampion=card.rarity?.toLowerCase()==="champion";
+  const isChampion=isChampionCard(card);
   const evoInfo=card.evolutionLevel>0?EVO_TIERS[card.name]:null;
   return(
     <div onClick={onClick} style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,padding:"8px 4px",background:selected?`${col}25`:"rgba(255,255,255,0.04)",border:`2px solid ${selected?col:isChampion?"rgba(255,111,0,0.3)":"rgba(255,255,255,0.08)"}`,borderRadius:10,cursor:"pointer",transition:"all 0.15s",boxShadow:selected?`0 0 14px ${col}55`:isChampion?"0 0 8px rgba(255,111,0,0.2)":"none",position:"relative",minHeight:80}}>
@@ -330,7 +333,7 @@ function CardTile({card,selected,onClick}){
 function DeckCardSlot({card,onRemove}){
   if(!card) return <div style={{aspectRatio:"3/4",border:"2px dashed rgba(255,255,255,0.08)",borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",color:"rgba(255,255,255,0.12)",fontSize:20}}>+</div>;
   const col=RARITY_COLORS[card.rarity?.toLowerCase()]||"#888";
-  const isChampion=card.rarity?.toLowerCase()==="champion";
+  const isChampion=isChampionCard(card);
   const isEvo=card.evolutionLevel>0;
   const borderCol=isChampion?"#ff6f00":isEvo?"rgba(0,229,255,0.6)":col+"66";
   const glowShadow=isChampion?"0 0 8px rgba(255,111,0,0.3)":isEvo?"0 0 8px rgba(0,229,255,0.3)":"none";
@@ -408,7 +411,7 @@ function DeckOption({deckData,explanation,allCards,onSelect,index,isAIGenerated}
   const isLive=deckData.source==="live";
   const upgrades=explanation?.upgradePriority||[];
   const evosInDeck=deckData.deckCards?.filter(c=>c?.evolutionLevel>0)||[];
-  const heroInDeck=deckData.deckCards?.find(c=>c?.rarity?.toLowerCase()==="champion")||(deckData.hero?{name:deckData.hero}:null);
+  const heroInDeck=deckData.deckCards?.find(c=>isChampionCard(c))||(deckData.hero?{name:deckData.hero}:null);
 
   return(
     <div style={{background:isAIGenerated?"rgba(156,39,176,0.04)":isCurrentDeck?"rgba(0,229,255,0.04)":"rgba(255,255,255,0.025)",border:`1px solid ${col}${isCurrentDeck||isAIGenerated?"55":"33"}`,borderRadius:14,padding:16,marginBottom:16}}>
@@ -458,7 +461,7 @@ function DeckOption({deckData,explanation,allCards,onSelect,index,isAIGenerated}
           const card=allCards.find(c=>c.name.toLowerCase()===cardName.toLowerCase());
           const rcol=card?(RARITY_COLORS[card.rarity?.toLowerCase()]||"#888"):"#444";
           const lfm=card?(card.maxLevel||14)-(card.level||1):99;
-          const isChamp=card?.rarity?.toLowerCase()==="champion";
+          const isChamp=isChampionCard(card);
           const evoInfo=card?.evolutionLevel>0?EVO_TIERS[card.name]:null;
           return(
             <div key={i} style={{aspectRatio:"3/4",background:card?`linear-gradient(145deg,${rcol}20,${rcol}08)`:"rgba(255,50,50,0.1)",border:`1.5px solid ${card?isChamp?"#ff6f00":rcol+"55":"rgba(255,50,50,0.3)"}`,borderRadius:8,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:3,gap:1,position:"relative",boxShadow:isChamp?"0 0 6px rgba(255,111,0,0.2)":"none"}}>
@@ -585,7 +588,7 @@ export default function App(){
 
       const top=decks[0];
       const evosOwned=cards.filter(c=>c.evolutionLevel>0);
-      const heroesOwned=cards.filter(c=>c.rarity?.toLowerCase()==="champion");
+      const heroesOwned=cards.filter(c=>isChampionCard(c));
       const statsLine=Object.keys(stats).length>0
         ?`\n\n📊 Your WRs: ${Object.entries(stats).map(([a,s])=>`${a} ${Math.round(s.wins/(s.wins+s.losses)*100)}%`).join(", ")}`:"";
       const bracketLine=meta?.bracket?`\n🎯 Bracket: ${meta.bracket}${meta.usingGlobal?" (global fallback)":""}` :"";
@@ -623,7 +626,7 @@ export default function App(){
     const matched=deckData.deckCards||deckData.cards.map(name=>allCards.find(c=>c.name.toLowerCase()===name.toLowerCase())).filter(Boolean);
     setDeck(matched);setTab("build");
     const evos=matched.filter(c=>c?.evolutionLevel>0);
-    const hero=matched.find(c=>c?.rarity?.toLowerCase()==="champion");
+    const hero=matched.find(c=>isChampionCard(c));
     setMessages(prev=>[...prev,
       {role:"user",content:`Selected ${deckData.name||"deck"}`},
       {role:"assistant",content:`🔥 **${deckData.name}** locked in!\n${deckData.tier} · ${deckData.powerRating}/100${deckData.personalWR!=null?` · 🎮 ${deckData.personalWR}% your WR`:""}${deckData.wilsonScore?` · Wilson ${deckData.wilsonScore}%`:""}${deckData.bracket?`\n🎯 ${deckData.bracket} bracket data`:""}\n${hero?`👑 Hero: ${hero.name} — ${HERO_SYNERGIES[hero.name]?.note||"powerful ability"}`:""}\n${evos.length>0?`⚡ EVOs: ${evos.map(c=>`${c.name} (${EVO_TIERS[c.name]?.tier||"A"})`).join(", ")}`:""}\n\n${deckData.winCondition||"Use your win condition aggressively!"}\n\nAsk me anything!`}
@@ -633,7 +636,7 @@ export default function App(){
   const toggleCard=(card)=>{
     const key=card.id||card.name;
     if(deck.find(c=>(c.id||c.name)===key)){setDeck(deck.filter(c=>(c.id||c.name)!==key));return;}
-    if(card.rarity?.toLowerCase()==="champion"&&deck.some(c=>c.rarity?.toLowerCase()==="champion")) return;
+    if(isChampionCard(card)&&deck.some(c=>isChampionCard(c))) return;
     if(deck.length<8) setDeck([...deck,card]);
   };
 
@@ -641,7 +644,7 @@ export default function App(){
     const text=custom||input.trim();
     if(!text||chatLoading) return;
     setInput("");
-    const deckDesc=deck.length?`Current deck: ${deck.map(c=>`${c.name}(${c.elixirCost}e,L${c.level||"?"}${c.evolutionLevel>0?` EVO${c.evolutionLevel}`:""}${c.rarity?.toLowerCase()==="champion"?" 👑":""}`).join(", ")}`:"No deck selected.";
+    const deckDesc=deck.length?`Current deck: ${deck.map(c=>`${c.name}(${c.elixirCost}e,L${c.level||"?"}${c.evolutionLevel>0?` EVO${c.evolutionLevel}`:""}${isChampionCard(c)?" 👑":""}`).join(", ")}`:"No deck selected.";
     const playerDesc=player?`Player: ${player.name}, Trophies: ${player.trophies}, King Level: ${player.expLevel}`:"No account linked.";
     const statsDesc=Object.keys(battleStats).length>0?`Personal WRs: ${Object.entries(battleStats).map(([a,s])=>`${a} ${Math.round(s.wins/(s.wins+s.losses)*100)}%`).join(", ")}`:""
     const userMsg={role:"user",content:text};
@@ -661,7 +664,7 @@ export default function App(){
   const filtered=allCards.filter(c=>{
     const ms=c.name.toLowerCase().includes(search.toLowerCase());
     const mt=filterType==="all"||
-      (filterType==="champion"&&(c.rarity?.toLowerCase()==="champion"||["Golden Knight","Archer Queen","Skeleton King","Mighty Miner","Little Prince","Monk","Boss Bandit","Goblinstein"].includes(c.name)))||
+      (filterType==="champion"&&isChampionCard(c))||
       (filterType==="evo"&&c.evolutionLevel>0)||
       (filterType!=="champion"&&filterType!=="evo"&&c.type?.toLowerCase()===filterType);
     return ms&&mt;
@@ -670,7 +673,7 @@ export default function App(){
   const avgElixir=deck.length?(deck.reduce((s,c)=>s+(c.elixirCost||0),0)/deck.length).toFixed(1):0;
   const deckPower=deck.length>0?scoreDeckLocal(deck):0;
   const deckEvos=deck.filter(c=>c?.evolutionLevel>0);
-  const deckHero=deck.find(c=>c?.rarity?.toLowerCase()==="champion");
+  const deckHero=deck.find(c=>isChampionCard(c));
   const quickPrompts=["How do I play this?","What counters this?","Best hero for this?","Rate my EVO choices","Upgrade priority?"];
   const activeDecks=decksView==="ai"?aiDecks:deckOptions;
   const activeExplanations=decksView==="ai"?aiExplanations:explanations;
