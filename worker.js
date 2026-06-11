@@ -1,4 +1,4 @@
-// ─── ROYALE DECK AI v2 WORKER ─────────────────────────────────────────────────
+// ─── ROYALE DECK AI v2.0.1 WORKER ────────────────────────────────────────────
 // v2 improvements:
 // 1. Trophy-range filtering
 // 2. Wilson score confidence interval
