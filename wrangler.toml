@@ -5,4 +5,4 @@ compatibility_date = "2026-06-11"
 [[d1_databases]]
 binding = "DB"
 database_name = "royale-deck-ai"
-database_id = "YOUR_D1_DATABASE_ID"
+database_id = "d1de08a3-06ca-4919-98b6-78c2239ebade"
