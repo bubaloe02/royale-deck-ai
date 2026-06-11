@@ -662,7 +662,7 @@ export default function App(){
     const mt=filterType==="all"||
       (filterType==="champion"&&(c.rarity?.toLowerCase()==="champion"||["Golden Knight","Archer Queen","Skeleton King","Mighty Miner","Little Prince","Monk","Boss Bandit","Goblinstein"].includes(c.name)))||
       (filterType==="evo"&&c.evolutionLevel>0)||
-      c.type?.toLowerCase()===filterType;
+      (filterType!=="champion"&&filterType!=="evo"&&c.type?.toLowerCase()===filterType);
     return ms&&mt;
   });
 
