@@ -214,7 +214,11 @@ async function fetchDecks(playerData, cards, battleStats) {
   if(currentDeckCards.length===8){
     const cardMap={};
     cards.forEach(c=>{cardMap[c.name.toLowerCase()]=c;});
-    const dc=currentDeckCards.map(c=>cardMap[c.name.toLowerCase()]||c);
+    const activeEvoNames=new Set(currentDeckCards.filter(c=>c.evolutionLevel>0).map(c=>c.name.toLowerCase()));
+    const dc=currentDeckCards.map(c=>{
+      const base=cardMap[c.name.toLowerCase()]||c;
+      return {...base,evolutionLevel:activeEvoNames.has(c.name.toLowerCase())?c.evolutionLevel:0};
+    });
     const pr=scoreDeckLocal(dc);
     const archetype=guessArchetype(currentDeckCards.map(c=>c.name));
     const personalWR=battleStats[archetype];
