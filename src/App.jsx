@@ -545,6 +545,7 @@ function DeckOption({deckData,explanation,allCards,onSelect,index,isAIGenerated}
 }
 
 export default function App(){
+  console.log('Clerk key:', process.env.REACT_APP_CLERK_PUBLISHABLE_KEY);
   const [tagInput,setTagInput]=useState("");
   const [player,setPlayer]=useState(null);
   const [allCards,setAllCards]=useState([]);
