@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { useUser, SignIn } from "@clerk/react";
+import { supabase } from './supabase';
 
 const WORKER_URL = "https://small-king-a65c.jared1999.workers.dev";
 
@@ -549,8 +549,73 @@ function DeckOption({deckData,explanation,allCards,onSelect,index,isAIGenerated}
   }
 }
 
+function AuthScreen() {
+  const [view, setView] = useState('login');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+
+  const submit = async () => {
+    setError(''); setSuccess(''); setLoading(true);
+    try {
+      if (view === 'login') {
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+      } else {
+        if (password !== confirm) throw new Error('Passwords do not match');
+        if (password.length < 8) throw new Error('Password must be at least 8 characters');
+        const { error } = await supabase.auth.signUp({ email, password });
+        if (error) throw error;
+        setSuccess('Account created! Check your email to confirm.');
+      }
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  };
+
+  return (
+    <div style={{minHeight:'100dvh',background:'#08080f',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:24}}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;600;700&family=Bebas+Neue&display=swap');`}</style>
+      <div style={{fontSize:52,marginBottom:8}}>👑</div>
+      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:32,letterSpacing:3,color:'#ff6f00',marginBottom:4}}>ROYALE DECK AI</div>
+      <div style={{color:'#333',fontSize:13,marginBottom:32}}>AI-powered deck builder · Live meta · EVO coaching</div>
+      <div style={{width:'100%',maxWidth:360,background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,111,0,0.15)',borderRadius:16,padding:28}}>
+        <div style={{display:'flex',marginBottom:24,background:'rgba(255,255,255,0.04)',borderRadius:8,padding:3,gap:3}}>
+          {['login','register'].map(v=>(
+            <button key={v} onClick={()=>{setView(v);setError('');setSuccess('');}} style={{flex:1,padding:'8px',background:view===v?'rgba(255,111,0,0.15)':'transparent',border:view===v?'1px solid rgba(255,111,0,0.35)':'1px solid transparent',borderRadius:6,color:view===v?'#ff9a40':'#444',cursor:'pointer',fontFamily:"'Bebas Neue',sans-serif",fontSize:13,letterSpacing:1}}>
+              {v==='login'?'SIGN IN':'SIGN UP'}
+            </button>
+          ))}
+        </div>
+        <div style={{display:'flex',flexDirection:'column',gap:12}}>
+          <input value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email address" type="email" style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.1)',borderRadius:8,padding:'12px 14px',color:'#ddd',fontFamily:"'Rajdhani',sans-serif",fontSize:14,outline:'none'}}/>
+          <input value={password} onChange={e=>setPassword(e.target.value)} placeholder="Password" type="password" onKeyDown={e=>e.key==='Enter'&&view==='login'&&submit()} style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.1)',borderRadius:8,padding:'12px 14px',color:'#ddd',fontFamily:"'Rajdhani',sans-serif",fontSize:14,outline:'none'}}/>
+          {view==='register'&&(
+            <input value={confirm} onChange={e=>setConfirm(e.target.value)} placeholder="Confirm password" type="password" onKeyDown={e=>e.key==='Enter'&&submit()} style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.1)',borderRadius:8,padding:'12px 14px',color:'#ddd',fontFamily:"'Rajdhani',sans-serif",fontSize:14,outline:'none'}}/>
+          )}
+          {error&&<div style={{color:'#ff5252',fontSize:12,textAlign:'center',padding:'4px 0'}}>{error}</div>}
+          {success&&<div style={{color:'#4caf50',fontSize:12,textAlign:'center',padding:'4px 0'}}>{success}</div>}
+          <button onClick={submit} disabled={loading} style={{padding:'13px',background:'linear-gradient(135deg,#ff6f00,#e65100)',border:'none',borderRadius:9,color:'#fff',cursor:loading?'default':'pointer',fontFamily:"'Bebas Neue',sans-serif",fontSize:14,letterSpacing:1.5,opacity:loading?0.6:1,marginTop:4}}>
+            {loading?'...':(view==='login'?'SIGN IN':'CREATE ACCOUNT')}
+          </button>
+        </div>
+        <div style={{textAlign:'center',marginTop:16,fontSize:12,color:'#333'}}>
+          {view==='login'?'No account? ':'Already have one? '}
+          <span onClick={()=>{setView(view==='login'?'register':'login');setError('');setSuccess('');}} style={{color:'#ff9a40',cursor:'pointer',fontWeight:700}}>
+            {view==='login'?'Sign up free':'Sign in'}
+          </span>
+        </div>
+      </div>
+      <div style={{marginTop:24,fontSize:11,color:'#222',textAlign:'center'}}>🔒 Secured by Supabase · Your data stays private</div>
+    </div>
+  );
+}
+
 export default function App(){
-  const {isSignedIn,isLoaded,user}=useUser();
+  const [authUser,setAuthUser]=useState(null);
+  const [authLoading,setAuthLoading]=useState(true);
   const [tagInput,setTagInput]=useState("");
   const [player,setPlayer]=useState(null);
   const [allCards,setAllCards]=useState([]);
@@ -583,11 +648,20 @@ export default function App(){
   },[]);
 
   useEffect(()=>{
-    if(isSignedIn&&user){
-      const saved=localStorage.getItem(`royale_tag_${user.id}`);
-      if(saved) setTagInput(saved);
-    }
-  },[isSignedIn,user]);
+    supabase.auth.getSession().then(({data:{session}})=>{
+      setAuthUser(session?.user||null);
+      if(session?.user){
+        supabase.from('user_profiles').select('player_tag').eq('id',session.user.id).single()
+          .then(({data})=>{if(data?.player_tag) setTagInput(data.player_tag);});
+      }
+      setAuthLoading(false);
+    });
+    const {data:{subscription}}=supabase.auth.onAuthStateChange((_event,session)=>{
+      setAuthUser(session?.user||null);
+    });
+    return ()=>subscription.unsubscribe();
+  // eslint-disable-next-line
+  },[]);
 
   const fetchPlayer=async()=>{
     const tag=tagInput.trim().replace(/^#/,"").toUpperCase();
@@ -597,6 +671,7 @@ export default function App(){
       const data=await crFetch(tag);
       if(!data.name) throw new Error("Player not found.");
       setPlayer(data);
+      saveTagToAccount(tag);
       const cards=(data.cards||[]).sort((a,b)=>(a.elixirCost||0)-(b.elixirCost||0));
       setAllCards(cards);
       console.log("[DEBUG] first 5 cards:", cards.slice(0,5).map(c=>({name:c.name,rarity:c.rarity,type:c.type,evolutionLevel:c.evolutionLevel})));
@@ -632,6 +707,26 @@ export default function App(){
       setError(`Failed: ${e.message}`);setFetchStatus("");
     }
     setFetching(false);
+  };
+
+  const saveTagToAccount=async(tag)=>{
+    if(!authUser) return;
+    await supabase.from('user_profiles').upsert({
+      id:authUser.id,
+      player_tag:tag.replace('#','').toUpperCase(),
+      updated_at:new Date().toISOString()
+    });
+  };
+
+  const handleLogout=async()=>{
+    await supabase.auth.signOut();
+    setAuthUser(null);
+    setPlayer(null);
+    setAllCards([]);
+    setDeck([]);
+    setDeckOptions([]);
+    setTagInput('');
+    setTab('home');
   };
 
   const generateAIDecks=async()=>{
@@ -712,17 +807,8 @@ export default function App(){
   const activeDecks=decksView==="ai"?aiDecks:deckOptions;
   const activeExplanations=decksView==="ai"?aiExplanations:explanations;
 
-  if(!isLoaded) return (
-    <div style={{minHeight:'100dvh',background:'#08080f',display:'flex',alignItems:'center',justifyContent:'center'}}>
-      <div style={{fontSize:48}}>👑</div>
-    </div>
-  );
-  if(!isSignedIn) return (
-    <div style={{minHeight:'100dvh',background:'#08080f',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:20}}>
-      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:32,color:'#ff6f00',letterSpacing:3}}>👑 ROYALE DECK AI</div>
-      <SignIn routing='hash'/>
-    </div>
-  );
+  if(authLoading) return <div style={{minHeight:'100dvh',background:'#08080f',display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{fontSize:48}}>👑</div></div>;
+  if(!authUser) return <AuthScreen />;
 
   return(
     <div style={{minHeight:"100dvh",background:"#08080f",color:"#e0e0e0",fontFamily:"'Rajdhani','Oswald',sans-serif",display:"flex",flexDirection:"column",maxWidth:480,margin:"0 auto",position:"relative"}}>
@@ -748,16 +834,19 @@ export default function App(){
             <div style={{minWidth:0}}>
               <div style={{fontSize:12,fontWeight:700,color:"#ff9a40",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:90}}>{player.name}</div>
               <div style={{fontSize:9,color:"#444"}}>{player.trophies?.toLocaleString()} 🏆</div>
+              <div style={{fontSize:8,color:"#333",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:90}}>{authUser?.email}</div>
             </div>
-            <button onClick={()=>{setPlayer(null);setAllCards([]);setDeck([]);setDeckOptions([]);setExplanations([]);setBattleStats({});setAiDecks([]);setAiExplanations([]);setTagInput("");setTab("home");setSupportCard(null);}} style={{background:"rgba(255,50,50,0.1)",border:"1px solid rgba(255,50,50,0.2)",borderRadius:4,color:"#ff5252",fontSize:9,cursor:"pointer",padding:"2px 6px",fontFamily:"'Rajdhani',sans-serif",fontWeight:700}}>✕</button>
+            <button onClick={handleLogout} style={{background:"rgba(255,50,50,0.1)",border:"1px solid rgba(255,50,50,0.2)",borderRadius:4,color:"#ff5252",fontSize:9,cursor:"pointer",padding:"2px 6px",fontFamily:"'Rajdhani',sans-serif",fontWeight:700}}>LOGOUT</button>
           </div>
         ):(
-          <div style={{display:"flex",gap:6}}>
+          <div style={{display:"flex",gap:6,alignItems:"center"}}>
+            <div style={{fontSize:9,color:"#333",maxWidth:80,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{authUser?.email}</div>
             <input value={tagInput} onChange={e=>setTagInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&fetchPlayer()} placeholder="#PLAYERTAG"
               style={{width:110,background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:7,padding:"7px 8px",color:"#ddd",fontFamily:"'Rajdhani',sans-serif",fontSize:12,outline:"none",letterSpacing:1}}/>
             <button onClick={fetchPlayer} disabled={fetching} style={{padding:"7px 12px",background:"linear-gradient(135deg,#ff6f00,#e65100)",border:"none",borderRadius:7,color:"#fff",cursor:fetching?"default":"pointer",fontFamily:"'Bebas Neue',sans-serif",fontSize:13,letterSpacing:1,opacity:fetching?0.6:1}}>
               {fetching?"...":"LINK"}
             </button>
+            <button onClick={handleLogout} style={{padding:"7px 8px",background:"rgba(255,50,50,0.08)",border:"1px solid rgba(255,50,50,0.15)",borderRadius:7,color:"#ff5252",cursor:"pointer",fontFamily:"'Bebas Neue',sans-serif",fontSize:11,letterSpacing:0.5}}>OUT</button>
           </div>
         )}
       </div>
