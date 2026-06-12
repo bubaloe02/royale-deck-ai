@@ -424,8 +424,8 @@ function DeckOption({deckData,explanation,allCards,onSelect,index,isAIGenerated}
   const ratingColor=deckData.powerRating>=80?"#4caf50":deckData.powerRating>=60?"#ffd700":"#ff9800";
   const isLive=deckData.source==="live";
   const upgrades=explanation?.upgradePriority||[];
-  const evosInDeck=deckData.deckCards?.filter(c=>c?.evolutionLevel>0&&!c?.iconUrls?.heroMedium&&c.name!==heroInDeck?.name)||[];
   const heroInDeck=deckData.deckCards?.find(c=>!!c.iconUrls?.heroMedium||isChampionCard(c))||(deckData.hero?{name:deckData.hero}:null);
+  const evosInDeck=deckData.deckCards?.filter(c=>c?.evolutionLevel>0&&!c?.iconUrls?.heroMedium&&c.name!==heroInDeck?.name)||[];
 
   return(
     <div style={{background:isAIGenerated?"rgba(156,39,176,0.04)":isCurrentDeck?"rgba(0,229,255,0.04)":"rgba(255,255,255,0.025)",border:`1px solid ${col}${isCurrentDeck||isAIGenerated?"55":"33"}`,borderRadius:14,padding:16,marginBottom:16}}>
