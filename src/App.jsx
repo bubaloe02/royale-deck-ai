@@ -418,6 +418,7 @@ function MetaNewsCard({news}){
 }
 
 function DeckOption({deckData,explanation,allCards,onSelect,index,isAIGenerated}){
+  try{
   const isCurrentDeck=deckData.matchType==="current";
   const col=isCurrentDeck?"#00e5ff":isAIGenerated?"#9c27b0":["#ffd700","#c0c0c0","#cd7f32"][index]||"#888";
   const tierCol=getTierColor(deckData.tier);
@@ -542,6 +543,9 @@ function DeckOption({deckData,explanation,allCards,onSelect,index,isAIGenerated}
       )}
     </div>
   );
+  }catch(e){
+    return <div style={{color:"#ff5252",background:"rgba(255,50,50,0.08)",border:"1px solid rgba(255,50,50,0.25)",borderRadius:10,padding:"12px 16px",marginBottom:16,fontSize:12,fontFamily:"monospace"}}>⚠️ DeckOption render error: {e.message}</div>;
+  }
 }
 
 export default function App(){
