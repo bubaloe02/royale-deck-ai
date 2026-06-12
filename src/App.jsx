@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
+import { useUser, SignIn } from "@clerk/react";
 
 const WORKER_URL = "https://small-king-a65c.jared1999.workers.dev";
 
@@ -549,6 +550,7 @@ function DeckOption({deckData,explanation,allCards,onSelect,index,isAIGenerated}
 }
 
 export default function App(){
+  const {isSignedIn,user}=useUser();
   const [tagInput,setTagInput]=useState("");
   const [player,setPlayer]=useState(null);
   const [allCards,setAllCards]=useState([]);
@@ -579,6 +581,13 @@ export default function App(){
   useEffect(()=>{
     fetchMetaNews().then(news=>{if(news&&!news.error)setMetaNews(news);}).catch(()=>{});
   },[]);
+
+  useEffect(()=>{
+    if(isSignedIn&&user){
+      const saved=localStorage.getItem(`royale_tag_${user.id}`);
+      if(saved) setTagInput(saved);
+    }
+  },[isSignedIn,user]);
 
   const fetchPlayer=async()=>{
     const tag=tagInput.trim().replace(/^#/,"").toUpperCase();
@@ -702,6 +711,17 @@ export default function App(){
   const quickPrompts=["How do I play this?","What counters this?","Best hero for this?","Rate my EVO choices","Upgrade priority?"];
   const activeDecks=decksView==="ai"?aiDecks:deckOptions;
   const activeExplanations=decksView==="ai"?aiExplanations:explanations;
+
+  if(!isSignedIn) return(
+    <div style={{minHeight:"100dvh",background:"#08080f",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:24}}>
+      <div style={{marginBottom:24,textAlign:"center"}}>
+        <div style={{fontSize:48,marginBottom:8}}>👑</div>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:3,color:"#ff6f00"}}>ROYALE DECK AI</div>
+        <div style={{color:"#444",fontSize:12,marginTop:4,letterSpacing:1}}>Sign in to build your perfect deck</div>
+      </div>
+      <SignIn appearance={{variables:{colorPrimary:"#ff6f00",colorBackground:"#0f0f1a",colorText:"#e0e0e0",colorInputBackground:"#1a1a2e",colorInputText:"#e0e0e0"},elements:{card:{background:"#0f0f1a",border:"1px solid rgba(255,111,0,0.2)",borderRadius:"14px",boxShadow:"0 0 40px rgba(255,111,0,0.08)"},headerTitle:{color:"#ff9a40"},headerSubtitle:{color:"#555"},formButtonPrimary:{background:"linear-gradient(135deg,#ff6f00,#e65100)",fontFamily:"'Bebas Neue',sans-serif",letterSpacing:"1px"}}}}/>
+    </div>
+  );
 
   return(
     <div style={{minHeight:"100dvh",background:"#08080f",color:"#e0e0e0",fontFamily:"'Rajdhani','Oswald',sans-serif",display:"flex",flexDirection:"column",maxWidth:480,margin:"0 auto",position:"relative"}}>
