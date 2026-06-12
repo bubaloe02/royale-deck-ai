@@ -812,7 +812,10 @@ export default function App(){
   const activeDecks=decksView==="ai"?aiDecks:deckOptions;
   const activeExplanations=decksView==="ai"?aiExplanations:explanations;
 
-  if(authLoading) return <div style={{minHeight:'100dvh',background:'#08080f',display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{fontSize:48}}>👑</div></div>;
+  if(authLoading) return <div style={{minHeight:'100dvh',background:'#08080f',display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:16}}>
+    <div style={{fontSize:52}}>👑</div>
+    <div style={{color:'#333',fontSize:11}}>URL: {process.env.REACT_APP_SUPABASE_URL ? 'found' : 'MISSING'}</div>
+  </div>;
   if(!authUser) return <AuthScreen />;
 
   return(
