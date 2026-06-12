@@ -655,11 +655,16 @@ export default function App(){
           .then(({data})=>{if(data?.player_tag) setTagInput(data.player_tag);});
       }
       setAuthLoading(false);
-    });
-    const {data:{subscription}}=supabase.auth.onAuthStateChange((_event,session)=>{
-      setAuthUser(session?.user||null);
-    });
-    return ()=>subscription.unsubscribe();
+    }).catch(()=>setAuthLoading(false));
+
+    let subscription=null;
+    try{
+      const {data}=supabase.auth.onAuthStateChange((_event,session)=>{
+        setAuthUser(session?.user||null);
+      });
+      subscription=data.subscription;
+    }catch(e){}
+    return ()=>subscription?.unsubscribe();
   // eslint-disable-next-line
   },[]);
 
