@@ -739,6 +739,7 @@ export default function App(){
       </div>
 
       {fetchStatus&&<div style={{background:"rgba(255,111,0,0.06)",borderBottom:"1px solid rgba(255,111,0,0.12)",color:"#cc7a30",padding:"5px 16px",fontSize:11,flexShrink:0}}>⏳ {fetchStatus}</div>}
+      <div style={{background:"rgba(255,255,255,0.04)",borderBottom:"1px solid rgba(255,255,255,0.06)",color:process.env.REACT_APP_CLERK_PUBLISHABLE_KEY?"#4caf50":"#ff5252",padding:"3px 16px",fontSize:10,flexShrink:0}}>ENV: {process.env.REACT_APP_CLERK_PUBLISHABLE_KEY?"KEY FOUND":"KEY MISSING"}</div>
       {error&&<div style={{background:"rgba(255,50,50,0.07)",borderBottom:"1px solid rgba(255,50,50,0.15)",color:"#ff5252",padding:"5px 16px",fontSize:11,flexShrink:0}}>⚠️ {error}</div>}
       {dataSource&&!fetchStatus&&(
         <div style={{background:dataSource==="live"?"rgba(76,175,80,0.06)":"rgba(255,111,0,0.04)",borderBottom:`1px solid ${dataSource==="live"?"rgba(76,175,80,0.15)":"rgba(255,111,0,0.1)"}`,color:dataSource==="live"?"#66bb6a":"#555",padding:"4px 16px",fontSize:10,flexShrink:0}}>
