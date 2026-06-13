@@ -651,29 +651,39 @@ export default function App(){
   },[]);
 
   useEffect(()=>{
-    supabase.auth.getSession().then(({data:{session}})=>{
-      setAuthUser(session?.user||null);
+    const init=async()=>{
+      try{
+        const {data:{session}}=await supabase.auth.getSession();
+        setAuthUser(session?.user||null);
+        if(session?.user){
+          const {data:profile}=await supabase.from('user_profiles').select('player_tag').eq('id',session.user.id).single();
+          if(profile?.player_tag){
+            setTagInput(profile.player_tag);
+            fetchPlayer(profile.player_tag);
+          }
+        }
+      }catch(e){}
       setAuthLoading(false);
-    }).catch(()=>setAuthLoading(false));
+    };
+    init();
 
     let subscription=null;
     try{
-      const {data}=supabase.auth.onAuthStateChange((_event,session)=>{
+      const {data}=supabase.auth.onAuthStateChange(async(_event,session)=>{
         setAuthUser(session?.user||null);
+        if(_event==='SIGNED_IN'&&session?.user){
+          const {data:profile}=await supabase.from('user_profiles').select('player_tag').eq('id',session.user.id).single();
+          if(profile?.player_tag){
+            setTagInput(profile.player_tag);
+            fetchPlayer(profile.player_tag);
+          }
+        }
       });
       subscription=data.subscription;
     }catch(e){}
     return ()=>subscription?.unsubscribe();
   // eslint-disable-next-line
   },[]);
-
-  useEffect(()=>{
-    if(!authUser) return;
-    supabase.from('user_profiles').select('player_tag').eq('id',authUser.id).single()
-      .then(({data})=>{if(data?.player_tag) fetchPlayer(data.player_tag);})
-      .catch(()=>{});
-  // eslint-disable-next-line
-  },[authUser?.id]);
 
   const fetchPlayer=async(tagOverride)=>{
     const tag=(tagOverride||tagInput).trim().replace(/^#/,"").toUpperCase();
@@ -684,7 +694,11 @@ export default function App(){
       const data=await crFetch(tag);
       if(!data.name) throw new Error("Player not found.");
       setPlayer(data);
-      saveTagToAccount(tag);
+      if(authUser){
+        const {error}=await supabase.from('user_profiles').upsert({id:authUser.id,player_tag:tag,updated_at:new Date().toISOString()});
+        if(error) console.error('Save tag error:',error);
+        else console.log('Tag saved:',tag);
+      }
       const cards=(data.cards||[]).sort((a,b)=>(a.elixirCost||0)-(b.elixirCost||0));
       setAllCards(cards);
       console.log("[DEBUG] first 5 cards:", cards.slice(0,5).map(c=>({name:c.name,rarity:c.rarity,type:c.type,evolutionLevel:c.evolutionLevel})));
