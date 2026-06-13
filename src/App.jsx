@@ -650,10 +650,6 @@ export default function App(){
   useEffect(()=>{
     supabase.auth.getSession().then(({data:{session}})=>{
       setAuthUser(session?.user||null);
-      if(session?.user){
-        supabase.from('user_profiles').select('player_tag').eq('id',session.user.id).single()
-          .then(({data})=>{if(data?.player_tag) setTagInput(data.player_tag);});
-      }
       setAuthLoading(false);
     }).catch(()=>setAuthLoading(false));
 
@@ -668,9 +664,18 @@ export default function App(){
   // eslint-disable-next-line
   },[]);
 
-  const fetchPlayer=async()=>{
-    const tag=tagInput.trim().replace(/^#/,"").toUpperCase();
+  useEffect(()=>{
+    if(!authUser) return;
+    supabase.from('user_profiles').select('player_tag').eq('id',authUser.id).single()
+      .then(({data})=>{if(data?.player_tag) fetchPlayer(data.player_tag);})
+      .catch(()=>{});
+  // eslint-disable-next-line
+  },[authUser?.id]);
+
+  const fetchPlayer=async(tagOverride)=>{
+    const tag=(tagOverride||tagInput).trim().replace(/^#/,"").toUpperCase();
     if(!tag) return;
+    if(tagOverride) setTagInput(tag);
     setFetching(true);setError("");setFetchStatus("Fetching profile...");
     try{
       const data=await crFetch(tag);
