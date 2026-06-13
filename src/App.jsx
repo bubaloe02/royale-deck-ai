@@ -549,6 +549,243 @@ function DeckOption({deckData,explanation,allCards,onSelect,index,isAIGenerated}
   }
 }
 
+const TWO_V2_COMBOS = [
+  { id:"hog_support", name:"Hog + Support", archetype:"Hog Cycle + Support", tier:"S", synergyScore:95, p1Role:"Win condition", p2Role:"Defense & spells", p1Cards:["Hog Rider","Ice Spirit","Skeletons","The Log"], p2Cards:["Cannon","Firecracker","Earthquake","Knight"], description:"P1 pushes Hog while P2 covers with buildings and spells.", tip:"Time Hog pushes when P2 drops Earthquake or Cannon for max pressure." },
+  { id:"loon_freeze", name:"Balloon + Freeze", archetype:"LavaLoon + Control", tier:"S", synergyScore:92, p1Role:"Air attacker", p2Role:"Freeze & air", p1Cards:["Balloon","Lava Hound","Lumberjack","Mega Minion"], p2Cards:["Freeze","Minions","Tombstone","Zap"], description:"Lava Hound tanks while P2 Freezes tower defenders for Balloon.", tip:"P2 waits for tower to target Lava Hound, then Freeze for a free Balloon hit." },
+  { id:"golem_cycle", name:"Golem + Cycle", archetype:"Golem Beatdown + Cycle", tier:"S", synergyScore:90, p1Role:"Beatdown tank", p2Role:"Cheap cycle support", p1Cards:["Golem","Night Witch","Baby Dragon","Lightning"], p2Cards:["Skeletons","Ice Spirit","Zap","Mega Minion"], description:"P1 builds Golem beatdown, P2 cycles cheap support behind it.", tip:"P2 Zap/Skeletons clear goblin distractions while Golem tanks tower shots." },
+  { id:"log_bait", name:"Log Bait + Bait Chain", archetype:"Double Bait", tier:"A+", synergyScore:85, p1Role:"Log Bait win con", p2Role:"Spell bait extension", p1Cards:["Goblin Barrel","Princess","Goblin Gang","Rocket"], p2Cards:["Skeleton Army","Minions","Knight","Fireball"], description:"Chain bait — drain all opponent spells across both players then barrel wins.", tip:"P2 deploys Skeleton Army to bait Log/Zap so P1's Goblin Barrel hits free." },
+  { id:"miner_poison", name:"Miner + Poison Cycle", archetype:"Miner Cycle + Support", tier:"A+", synergyScore:85, p1Role:"Miner chip", p2Role:"Poison chip", p1Cards:["Miner","Wall Breakers","Bats","Goblin Gang"], p2Cards:["Poison","Musketeer","Zap","Ice Golem"], description:"Alternate Miner and Poison every cycle for relentless tower chip damage.", tip:"Never let the tower breathe — Miner hits while Poison cooldown finishes." },
+  { id:"graveyard_poison", name:"Graveyard + Poison", archetype:"Graveyard Control", tier:"A+", synergyScore:84, p1Role:"Win condition", p2Role:"Spell support", p1Cards:["Graveyard","Ice Golem","Tombstone","Knight"], p2Cards:["Poison","Minions","Archers","Barbarian Barrel"], description:"P1 deploys Graveyard while P2's Poison zones out tower defenses.", tip:"P2 Poisons the moment P1 places Graveyard so skeletons get uncontested damage." },
+  { id:"pekka_bridge", name:"PEKKA + Bridge Spam", archetype:"Double Bridge Spam", tier:"A+", synergyScore:82, p1Role:"Heavy hitter", p2Role:"Flanker & spam", p1Cards:["P.E.K.K.A","Bandit","Battle Ram","Poison"], p2Cards:["Royal Ghost","Magic Archer","Electro Wizard","Zap"], description:"Both players spam bridge units simultaneously for overwhelming pushes.", tip:"Never push alone — wait for P2 to commit before bridging your PEKKA." },
+  { id:"giant_beatdown", name:"Giant + Beatdown", archetype:"Giant Beatdown", tier:"A", synergyScore:78, p1Role:"Front tank", p2Role:"Damage dealers", p1Cards:["Giant","Musketeer","Zap","Cannon"], p2Cards:["Witch","Baby Dragon","Fireball","Mega Minion"], description:"P1 deploys Giant as tank, P2 stacks damage units behind it.", tip:"Drop Giant at bridge, then P2 immediately stacks troops behind for full push." },
+  { id:"xbow_mortar", name:"X-Bow + Mortar Siege", archetype:"Double Siege", tier:"A", synergyScore:76, p1Role:"X-Bow siege", p2Role:"Mortar siege", p1Cards:["X-Bow","Tesla","Ice Spirit","Skeletons"], p2Cards:["Mortar","Ice Spirit","Skeletons","The Log"], description:"Dual siege forces opponent to split defense across both structures.", tip:"Deploy X-Bow on one side and Mortar opposite — opponent can't cover both." },
+  { id:"double_rush", name:"Double Lane Rush", archetype:"Full Rush", tier:"B+", synergyScore:68, p1Role:"Left lane", p2Role:"Right lane", p1Cards:["Barbarian Barrel","Goblin Gang","Knight","Archers"], p2Cards:["Minion Horde","Goblin Gang","Ice Spirit","Skeletons"], description:"Split lane rush — flood both lanes simultaneously to overwhelm defenses.", tip:"Commit to different lanes so opponent must defend two towers at once." },
+];
+
+function score2v2Combo(combo, p1Cards, p2Cards) {
+  const p1Owned = new Set(p1Cards.map(c => c.name.toLowerCase()));
+  const p2Owned = new Set(p2Cards.map(c => c.name.toLowerCase()));
+  const p1Match = combo.p1Cards.filter(n => p1Owned.has(n.toLowerCase())).length;
+  const p2Match = combo.p2Cards.filter(n => p2Owned.has(n.toLowerCase())).length;
+  const p1Ratio = p1Match / combo.p1Cards.length;
+  const p2Ratio = p2Match / combo.p2Cards.length;
+  let score = combo.synergyScore * (0.5 + p1Ratio * 0.25 + p2Ratio * 0.25);
+  const p1Evos = p1Cards.filter(c => c.evolutionLevel > 0 && combo.p1Cards.some(n => n.toLowerCase() === c.name.toLowerCase())).length;
+  const p2Evos = p2Cards.filter(c => c.evolutionLevel > 0 && combo.p2Cards.some(n => n.toLowerCase() === c.name.toLowerCase())).length;
+  score += (p1Evos + p2Evos) * 5;
+  const p1Champs = p1Cards.filter(c => isChampionCard(c) && combo.p1Cards.some(n => n.toLowerCase() === c.name.toLowerCase())).length;
+  const p2Champs = p2Cards.filter(c => isChampionCard(c) && combo.p2Cards.some(n => n.toLowerCase() === c.name.toLowerCase())).length;
+  score += (p1Champs + p2Champs) * 8;
+  return { ...combo, matchScore: Math.round(Math.min(100, score)), p1Match, p2Match, p1Total: combo.p1Cards.length, p2Total: combo.p2Cards.length };
+}
+
+async function explain2v2Combo(combo, player1, player2) {
+  const prompt = `2v2 Clash Royale combo: ${combo.name} (${combo.archetype})
+P1: ${player1.name} (${player1.trophies} trophies) — Role: ${combo.p1Role} — Cards: ${combo.p1Cards.join(", ")}
+P2: ${player2.name} (${player2.trophies} trophies) — Role: ${combo.p2Role} — Cards: ${combo.p2Cards.join(", ")}
+Match score: ${combo.matchScore}/100
+Give 2-3 sentences of strategic advice for this duo combo. Focus on timing and coordination.`;
+  return callAI("You are a Clash Royale 2v2 expert coach. Be concise.", prompt, null, 200);
+}
+
+function TwoV2Tab({ player1, allCards1 }) {
+  const [tag2Input, setTag2Input] = React.useState("");
+  const [player2, setPlayer2] = React.useState(null);
+  const [allCards2, setAllCards2] = React.useState([]);
+  const [twov2Decks, setTwov2Decks] = React.useState([]);
+  const [twov2Loading, setTwov2Loading] = React.useState(false);
+  const [twov2Error, setTwov2Error] = React.useState("");
+  const [aiTips, setAiTips] = React.useState({});
+
+  const fetchPlayer2 = async () => {
+    const tag = tag2Input.trim().replace(/^#/, "").toUpperCase();
+    if (!tag) return;
+    setTwov2Error(""); setTwov2Loading(true);
+    try {
+      const data = await crFetch(tag);
+      if (!data.name) throw new Error("Player not found.");
+      setPlayer2(data);
+      setAllCards2((data.cards || []).sort((a, b) => (a.elixirCost || 0) - (b.elixirCost || 0)));
+    } catch(e) { setTwov2Error(`Failed: ${e.message}`); }
+    setTwov2Loading(false);
+  };
+
+  const generateCombos = async () => {
+    if (!player1 || !player2) return;
+    setTwov2Loading(true); setTwov2Error(""); setAiTips({});
+    try {
+      const scored = TWO_V2_COMBOS
+        .map(combo => score2v2Combo(combo, allCards1, allCards2))
+        .sort((a, b) => b.matchScore - a.matchScore);
+      setTwov2Decks(scored);
+      const top = scored[0];
+      if (top) {
+        try {
+          const tip = await explain2v2Combo(top, player1, player2);
+          setAiTips(t => ({ ...t, [top.id]: tip }));
+        } catch(e) {}
+      }
+    } catch(e) { setTwov2Error(`Failed: ${e.message}`); }
+    setTwov2Loading(false);
+  };
+
+  const fetchAiTip = async (combo) => {
+    if (aiTips[combo.id] || !player1 || !player2) return;
+    setAiTips(t => ({ ...t, [combo.id]: "loading" }));
+    try {
+      const tip = await explain2v2Combo(combo, player1, player2);
+      setAiTips(t => ({ ...t, [combo.id]: tip }));
+    } catch(e) { setAiTips(t => ({ ...t, [combo.id]: null })); }
+  };
+
+  return (
+    <div style={{flex:1, overflowY:"auto", padding:16}}>
+      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:2,color:"#ff6f00",lineHeight:1,marginBottom:3}}>2v2 DUO BUILDER</div>
+      <div style={{color:"#333",fontSize:11,marginBottom:14}}>Find the best combo for you and your partner</div>
+
+      {/* Player 1 */}
+      <div style={{background:"rgba(255,111,0,0.05)",border:"1px solid rgba(255,111,0,0.15)",borderRadius:12,padding:12,marginBottom:10}}>
+        <div style={{fontSize:9,color:"#ff9a40",fontWeight:700,textTransform:"uppercase",letterSpacing:1,marginBottom:6}}>👤 PLAYER 1 — YOU</div>
+        {player1 ? (
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:14,fontWeight:700,color:"#ff9a40"}}>{player1.name}</div>
+              <div style={{fontSize:11,color:"#444"}}>{player1.trophies?.toLocaleString()} 🏆 · {player1.arena?.name}</div>
+            </div>
+            <div style={{fontSize:10,color:"#4caf50",fontWeight:700,background:"rgba(76,175,80,0.1)",border:"1px solid rgba(76,175,80,0.25)",borderRadius:4,padding:"2px 8px"}}>✓ LINKED</div>
+          </div>
+        ) : (
+          <div style={{fontSize:12,color:"#333"}}>Link your account from the header first</div>
+        )}
+      </div>
+
+      {/* Player 2 */}
+      <div style={{background:"rgba(33,150,243,0.05)",border:"1px solid rgba(33,150,243,0.15)",borderRadius:12,padding:12,marginBottom:14}}>
+        <div style={{fontSize:9,color:"#64b5f6",fontWeight:700,textTransform:"uppercase",letterSpacing:1,marginBottom:6}}>👥 PLAYER 2 — PARTNER</div>
+        {player2 ? (
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:14,fontWeight:700,color:"#64b5f6"}}>{player2.name}</div>
+              <div style={{fontSize:11,color:"#444"}}>{player2.trophies?.toLocaleString()} 🏆 · {player2.arena?.name}</div>
+            </div>
+            <button onClick={()=>{setPlayer2(null);setAllCards2([]);setTwov2Decks([]);setAiTips({});}} style={{padding:"4px 8px",background:"rgba(255,50,50,0.1)",border:"1px solid rgba(255,50,50,0.2)",borderRadius:4,color:"#ff5252",cursor:"pointer",fontSize:9,fontFamily:"'Rajdhani',sans-serif",fontWeight:700}}>CHANGE</button>
+          </div>
+        ) : (
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            <input value={tag2Input} onChange={e=>setTag2Input(e.target.value)} onKeyDown={e=>e.key==="Enter"&&fetchPlayer2()} placeholder="#PARTNER TAG"
+              style={{flex:1,background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:8,padding:"9px 12px",color:"#ddd",fontFamily:"'Rajdhani',sans-serif",fontSize:12,outline:"none",letterSpacing:1}}/>
+            <button onClick={fetchPlayer2} disabled={twov2Loading||!tag2Input.trim()} style={{padding:"9px 14px",background:"linear-gradient(135deg,#1565c0,#0d47a1)",border:"none",borderRadius:8,color:"#fff",cursor:twov2Loading||!tag2Input.trim()?"default":"pointer",fontFamily:"'Bebas Neue',sans-serif",fontSize:12,letterSpacing:1,opacity:twov2Loading||!tag2Input.trim()?0.5:1}}>
+              {twov2Loading?"...":"LINK"}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {twov2Error&&<div style={{color:"#ff5252",fontSize:12,marginBottom:12,padding:"7px 10px",background:"rgba(255,50,50,0.07)",border:"1px solid rgba(255,50,50,0.15)",borderRadius:8}}>⚠️ {twov2Error}</div>}
+
+      {player1&&player2&&(
+        <button onClick={generateCombos} disabled={twov2Loading}
+          style={{width:"100%",padding:"11px",background:twov2Loading?"rgba(255,111,0,0.25)":"linear-gradient(135deg,#ff6f00,#e65100)",border:"none",borderRadius:10,color:"#fff",cursor:twov2Loading?"default":"pointer",fontFamily:"'Bebas Neue',sans-serif",fontSize:14,letterSpacing:1.5,marginBottom:16,opacity:twov2Loading?0.6:1}}>
+          {twov2Loading?"⏳ ANALYZING COMBOS...":"👥 FIND BEST COMBOS"}
+        </button>
+      )}
+
+      {twov2Decks.length>0&&(
+        <>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:15,letterSpacing:1.5,color:"#ff9a40",marginBottom:10}}>BEST DUO COMBOS</div>
+          {twov2Decks.map((combo, idx)=>{
+            const tierCol = getTierColor(combo.tier);
+            const scoreColor = combo.matchScore>=80?"#4caf50":combo.matchScore>=60?"#ffd700":"#ff9800";
+            const tip = aiTips[combo.id];
+            return (
+              <div key={combo.id} style={{background:"rgba(255,255,255,0.025)",border:`1px solid ${idx===0?"rgba(255,215,0,0.2)":"rgba(255,255,255,0.07)"}`,borderRadius:12,padding:14,marginBottom:12}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4,flexWrap:"wrap"}}>
+                      {idx===0&&<div style={{fontSize:9,background:"rgba(255,215,0,0.12)",border:"1px solid rgba(255,215,0,0.3)",borderRadius:4,padding:"2px 6px",color:"#ffd700",fontWeight:800}}>⭐ BEST MATCH</div>}
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,color:"#ddd",letterSpacing:0.5}}>{combo.name}</div>
+                    </div>
+                    <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                      <div style={{fontSize:10,background:`${tierCol}22`,border:`1px solid ${tierCol}55`,borderRadius:4,padding:"1px 6px",color:tierCol,fontWeight:800}}>{combo.tier}</div>
+                      <div style={{fontSize:10,color:"#444"}}>{combo.archetype}</div>
+                    </div>
+                  </div>
+                  <div style={{textAlign:"right",flexShrink:0,marginLeft:8}}>
+                    <div style={{fontSize:22,fontWeight:800,color:scoreColor,fontFamily:"'Bebas Neue',sans-serif",lineHeight:1}}>{combo.matchScore}</div>
+                    <div style={{fontSize:8,color:"#333",textTransform:"uppercase",letterSpacing:0.5}}>match</div>
+                  </div>
+                </div>
+
+                <div style={{height:4,background:"rgba(255,255,255,0.06)",borderRadius:2,overflow:"hidden",marginBottom:10}}>
+                  <div style={{width:`${combo.matchScore}%`,height:"100%",background:`linear-gradient(90deg,${scoreColor},${scoreColor}88)`,borderRadius:2}}/>
+                </div>
+
+                <div style={{fontSize:11,color:"#555",marginBottom:10,lineHeight:1.5}}>{combo.description}</div>
+
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+                  <div style={{background:"rgba(255,111,0,0.04)",border:"1px solid rgba(255,111,0,0.12)",borderRadius:8,padding:"8px"}}>
+                    <div style={{fontSize:9,color:"#ff9a40",fontWeight:700,textTransform:"uppercase",letterSpacing:1,marginBottom:5}}>👤 P1: {combo.p1Role}</div>
+                    {combo.p1Cards.map((cardName,i)=>{
+                      const card = allCards1.find(c=>c.name.toLowerCase()===cardName.toLowerCase());
+                      return (
+                        <div key={i} style={{display:"flex",alignItems:"center",gap:5,marginBottom:3}}>
+                          <div style={{width:6,height:6,borderRadius:"50%",background:card?"#4caf50":"#444",flexShrink:0}}/>
+                          <div style={{fontSize:10,color:card?"#bbb":"#444",flex:1}}>{cardName}</div>
+                          {card?.evolutionLevel>0&&<div style={{fontSize:8,color:"#00e5ff",fontWeight:700}}>EVO</div>}
+                          {card&&isChampionCard(card)&&<div style={{fontSize:8}}>👑</div>}
+                        </div>
+                      );
+                    })}
+                    <div style={{fontSize:9,color:"#333",marginTop:4,borderTop:"1px solid rgba(255,255,255,0.04)",paddingTop:3}}>{combo.p1Match}/{combo.p1Total} owned</div>
+                  </div>
+                  <div style={{background:"rgba(33,150,243,0.04)",border:"1px solid rgba(33,150,243,0.12)",borderRadius:8,padding:"8px"}}>
+                    <div style={{fontSize:9,color:"#64b5f6",fontWeight:700,textTransform:"uppercase",letterSpacing:1,marginBottom:5}}>👥 P2: {combo.p2Role}</div>
+                    {combo.p2Cards.map((cardName,i)=>{
+                      const card = allCards2.find(c=>c.name.toLowerCase()===cardName.toLowerCase());
+                      return (
+                        <div key={i} style={{display:"flex",alignItems:"center",gap:5,marginBottom:3}}>
+                          <div style={{width:6,height:6,borderRadius:"50%",background:card?"#4caf50":"#444",flexShrink:0}}/>
+                          <div style={{fontSize:10,color:card?"#bbb":"#444",flex:1}}>{cardName}</div>
+                          {card?.evolutionLevel>0&&<div style={{fontSize:8,color:"#00e5ff",fontWeight:700}}>EVO</div>}
+                          {card&&isChampionCard(card)&&<div style={{fontSize:8}}>👑</div>}
+                        </div>
+                      );
+                    })}
+                    <div style={{fontSize:9,color:"#333",marginTop:4,borderTop:"1px solid rgba(255,255,255,0.04)",paddingTop:3}}>{combo.p2Match}/{combo.p2Total} owned</div>
+                  </div>
+                </div>
+
+                <div style={{fontSize:11,color:"#ffd700",background:"rgba(255,215,0,0.04)",border:"1px solid rgba(255,215,0,0.12)",borderRadius:6,padding:"6px 10px",marginBottom:tip||idx<3?8:0}}>
+                  💡 {combo.tip}
+                </div>
+
+                {tip==="loading"&&<div style={{fontSize:11,color:"#444",fontStyle:"italic"}}>🤖 Getting AI tip...</div>}
+                {tip&&tip!=="loading"&&<div style={{fontSize:11,color:"#ce93d8",background:"rgba(156,39,176,0.05)",border:"1px solid rgba(156,39,176,0.15)",borderRadius:6,padding:"6px 10px"}}>🤖 {tip}</div>}
+                {!tip&&idx>0&&idx<5&&(
+                  <button onClick={()=>fetchAiTip(combo)} style={{fontSize:10,color:"#555",background:"transparent",border:"1px solid rgba(255,255,255,0.06)",borderRadius:5,padding:"3px 8px",cursor:"pointer",fontFamily:"'Rajdhani',sans-serif"}}>🤖 Get AI tip</button>
+                )}
+              </div>
+            );
+          })}
+        </>
+      )}
+
+      {!player1&&(
+        <div style={{textAlign:"center",color:"#222",paddingTop:40,fontSize:13}}>
+          <div style={{fontSize:32,marginBottom:8}}>🔗</div>
+          Link your account from the header first
+        </div>
+      )}
+      {player1&&!player2&&twov2Decks.length===0&&(
+        <div style={{textAlign:"center",color:"#222",paddingTop:20,fontSize:12}}>
+          <div style={{fontSize:28,marginBottom:8}}>👥</div>
+          Enter your partner's tag above to find your best duo combos
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AuthScreen() {
   const [view, setView] = useState('login');
   const [email, setEmail] = useState('');
@@ -1051,6 +1288,11 @@ export default function App(){
           </div>
         )}
 
+        {/* DUO */}
+        {tab==="duo"&&(
+          <TwoV2Tab player1={player} allCards1={allCards}/>
+        )}
+
         {/* CHAT */}
         {tab==="chat"&&(
           <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
@@ -1114,6 +1356,7 @@ export default function App(){
           {id:"home",icon:"🏠",label:"Home"},
           {id:"decks",icon:"⚡",label:"Decks"},
           {id:"build",icon:"🃏",label:"Build"},
+          {id:"duo",icon:"👥",label:"DUO"},
           {id:"chat",icon:"🤖",label:"Coach"},
         ].map(t=>(
           <button key={t.id} onClick={()=>setTab(t.id)} style={{flex:1,padding:"10px 0",background:"transparent",border:"none",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
