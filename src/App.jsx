@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import { supabase } from './supabase';
+import confetti from 'canvas-confetti';
 
 const WORKER_URL = "https://small-king-a65c.jared1999.workers.dev";
 
@@ -899,12 +900,29 @@ export default function App(){
   const [twov2Decks,setTwov2Decks]=useState(null);
   const [twov2Loading,setTwov2Loading]=useState(false);
   const [twov2Error,setTwov2Error]=useState('');
+  const [showMilestone,setShowMilestone]=useState(false);
+  const milestoneShown=useRef(false);
   const chatEnd=useRef(null);
   const scrollBottom=()=>setTimeout(()=>chatEnd.current?.scrollIntoView({behavior:"smooth"}),50);
 
   useEffect(()=>{
     fetchMetaNews().then(news=>{if(news&&!news.error)setMetaNews(news);}).catch(()=>{});
   },[]);
+
+  useEffect(()=>{
+    if(!dbMeta?.battles||milestoneShown.current) return;
+    if(dbMeta.battles<1000000) return;
+    milestoneShown.current=true;
+    setShowMilestone(true);
+    const colors=['#ff6f00','#ffd700','#ff9a40'];
+    const end=Date.now()+5000;
+    const burst=()=>{
+      confetti({particleCount:200,spread:70,origin:{y:0.6},colors});
+      if(Date.now()<end) setTimeout(burst,400);
+    };
+    burst();
+    setTimeout(()=>setShowMilestone(false),5000);
+  },[dbMeta]);
 
   useEffect(()=>{
     const init=async()=>{
@@ -1381,6 +1399,18 @@ export default function App(){
             </button>
             <button onClick={handleLogout} style={{width:"100%",padding:"10px",background:"rgba(255,50,50,0.08)",border:"1px solid rgba(255,50,50,0.18)",borderRadius:9,color:"#ff5252",cursor:"pointer",fontFamily:"'Bebas Neue',sans-serif",fontSize:13,letterSpacing:1}}>SIGN OUT</button>
           </div>
+        </div>
+      )}
+
+      {/* 1M BATTLES MILESTONE BANNER */}
+      {showMilestone&&(
+        <div style={{position:"fixed",top:0,left:"50%",transform:"translateX(-50%)",zIndex:200,pointerEvents:"none",display:"flex",alignItems:"center",justifyContent:"center",width:"100%",maxWidth:480}}>
+          <div style={{margin:"18px auto 0",padding:"12px 28px",background:"linear-gradient(135deg,rgba(20,8,0,0.97),rgba(10,8,0,0.97))",border:"2px solid #ffd700",borderRadius:16,boxShadow:"0 0 40px rgba(255,215,0,0.4)",animation:"milestoneIn 0.4s ease-out",textAlign:"center"}}>
+            <div style={{fontSize:28,lineHeight:1,marginBottom:4}}>🎉</div>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,letterSpacing:3,color:"#ffd700",lineHeight:1}}>1,000,000 BATTLES!</div>
+            <div style={{fontSize:11,color:"#ff9a40",marginTop:4,letterSpacing:1}}>Live meta database milestone</div>
+          </div>
+          <style>{`@keyframes milestoneIn{from{opacity:0;transform:translateY(-20px)}to{opacity:1;transform:translateY(0)}}`}</style>
         </div>
       )}
 
