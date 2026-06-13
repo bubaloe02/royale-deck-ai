@@ -640,6 +640,9 @@ export default function App(){
   const [error,setError]=useState("");
   const [decksView,setDecksView]=useState("live");
   const [supportCard,setSupportCard]=useState(null);
+  const [profileOpen,setProfileOpen]=useState(false);
+  const [profileTag,setProfileTag]=useState("");
+  const [profileSaving,setProfileSaving]=useState(false);
   const chatEnd=useRef(null);
   const scrollBottom=()=>setTimeout(()=>chatEnd.current?.scrollIntoView({behavior:"smooth"}),50);
 
@@ -737,6 +740,22 @@ export default function App(){
     setDeckOptions([]);
     setTagInput('');
     setTab('home');
+  };
+
+  const openProfile=()=>{
+    setProfileTag(tagInput);
+    setProfileOpen(true);
+  };
+
+  const saveProfileTag=async()=>{
+    const tag=profileTag.trim().replace(/^#/,"").toUpperCase();
+    if(!tag||!authUser) return;
+    setProfileSaving(true);
+    await supabase.from('user_profiles').upsert({id:authUser.id,player_tag:tag,updated_at:new Date().toISOString()});
+    setTagInput(tag);
+    setProfileSaving(false);
+    setProfileOpen(false);
+    fetchPlayer(tag);
   };
 
   const generateAIDecks=async()=>{
@@ -849,16 +868,17 @@ export default function App(){
               <div style={{fontSize:9,color:"#444"}}>{player.trophies?.toLocaleString()} 🏆</div>
               <div style={{fontSize:8,color:"#333",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:90}}>{authUser?.email}</div>
             </div>
-            <button onClick={handleLogout} style={{background:"rgba(255,50,50,0.1)",border:"1px solid rgba(255,50,50,0.2)",borderRadius:4,color:"#ff5252",fontSize:9,cursor:"pointer",padding:"2px 6px",fontFamily:"'Rajdhani',sans-serif",fontWeight:700}}>LOGOUT</button>
+            <button onClick={openProfile} style={{background:"rgba(255,111,0,0.1)",border:"1px solid rgba(255,111,0,0.2)",borderRadius:4,color:"#ff9a40",fontSize:14,cursor:"pointer",padding:"2px 5px",lineHeight:1}}>👤</button>
+            <button onClick={handleLogout} style={{background:"rgba(255,50,50,0.1)",border:"1px solid rgba(255,50,50,0.2)",borderRadius:4,color:"#ff5252",fontSize:9,cursor:"pointer",padding:"2px 6px",fontFamily:"'Rajdhani',sans-serif",fontWeight:700}}>OUT</button>
           </div>
         ):(
           <div style={{display:"flex",gap:6,alignItems:"center"}}>
-            <div style={{fontSize:9,color:"#333",maxWidth:80,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{authUser?.email}</div>
             <input value={tagInput} onChange={e=>setTagInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&fetchPlayer()} placeholder="#PLAYERTAG"
               style={{width:110,background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:7,padding:"7px 8px",color:"#ddd",fontFamily:"'Rajdhani',sans-serif",fontSize:12,outline:"none",letterSpacing:1}}/>
             <button onClick={fetchPlayer} disabled={fetching} style={{padding:"7px 12px",background:"linear-gradient(135deg,#ff6f00,#e65100)",border:"none",borderRadius:7,color:"#fff",cursor:fetching?"default":"pointer",fontFamily:"'Bebas Neue',sans-serif",fontSize:13,letterSpacing:1,opacity:fetching?0.6:1}}>
               {fetching?"...":"LINK"}
             </button>
+            <button onClick={openProfile} style={{padding:"7px 8px",background:"rgba(255,111,0,0.08)",border:"1px solid rgba(255,111,0,0.15)",borderRadius:7,color:"#ff9a40",cursor:"pointer",fontSize:14,lineHeight:1}}>👤</button>
             <button onClick={handleLogout} style={{padding:"7px 8px",background:"rgba(255,50,50,0.08)",border:"1px solid rgba(255,50,50,0.15)",borderRadius:7,color:"#ff5252",cursor:"pointer",fontFamily:"'Bebas Neue',sans-serif",fontSize:11,letterSpacing:0.5}}>OUT</button>
           </div>
         )}
@@ -1040,6 +1060,36 @@ export default function App(){
           </div>
         )}
       </div>
+
+      {/* PROFILE MODAL */}
+      {profileOpen&&(
+        <div onClick={()=>setProfileOpen(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:24}}>
+          <div onClick={e=>e.stopPropagation()} style={{width:"100%",maxWidth:360,background:"#0f0f1a",border:"1px solid rgba(255,111,0,0.2)",borderRadius:16,padding:24,boxShadow:"0 0 40px rgba(255,111,0,0.1)"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:1.5,color:"#ff9a40"}}>👤 ACCOUNT</div>
+              <button onClick={()=>setProfileOpen(false)} style={{background:"transparent",border:"none",color:"#444",fontSize:18,cursor:"pointer",lineHeight:1}}>✕</button>
+            </div>
+            <div style={{marginBottom:16}}>
+              <div style={{fontSize:10,color:"#444",textTransform:"uppercase",letterSpacing:1,marginBottom:4}}>Email</div>
+              <div style={{fontSize:13,color:"#888",background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.07)",borderRadius:8,padding:"10px 12px"}}>{authUser?.email}</div>
+            </div>
+            <div style={{marginBottom:20}}>
+              <div style={{fontSize:10,color:"#444",textTransform:"uppercase",letterSpacing:1,marginBottom:4}}>Player Tag {tagInput&&<span style={{color:"#4caf50",marginLeft:4}}>· current: #{tagInput}</span>}</div>
+              <input
+                value={profileTag}
+                onChange={e=>setProfileTag(e.target.value)}
+                onKeyDown={e=>e.key==="Enter"&&saveProfileTag()}
+                placeholder="#PLAYERTAG"
+                style={{width:"100%",background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,111,0,0.2)",borderRadius:8,padding:"11px 14px",color:"#ddd",fontFamily:"'Rajdhani',sans-serif",fontSize:14,outline:"none",letterSpacing:1,boxSizing:"border-box"}}
+              />
+            </div>
+            <button onClick={saveProfileTag} disabled={profileSaving||!profileTag.trim()} style={{width:"100%",padding:"13px",background:"linear-gradient(135deg,#ff6f00,#e65100)",border:"none",borderRadius:9,color:"#fff",cursor:profileSaving||!profileTag.trim()?"default":"pointer",fontFamily:"'Bebas Neue',sans-serif",fontSize:14,letterSpacing:1.5,opacity:profileSaving||!profileTag.trim()?0.5:1,marginBottom:10}}>
+              {profileSaving?"SAVING...":"SAVE & LOAD"}
+            </button>
+            <button onClick={handleLogout} style={{width:"100%",padding:"10px",background:"rgba(255,50,50,0.08)",border:"1px solid rgba(255,50,50,0.18)",borderRadius:9,color:"#ff5252",cursor:"pointer",fontFamily:"'Bebas Neue',sans-serif",fontSize:13,letterSpacing:1}}>SIGN OUT</button>
+          </div>
+        </div>
+      )}
 
       {/* BOTTOM NAV */}
       <div style={{display:"flex",borderTop:"1px solid rgba(255,255,255,0.07)",background:"#080810",flexShrink:0,paddingBottom:"env(safe-area-inset-bottom)"}}>
