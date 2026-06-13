@@ -659,10 +659,10 @@ export default function App(){
           const {data:profile}=await supabase.from('user_profiles').select('player_tag').eq('id',session.user.id).single();
           if(profile?.player_tag){
             setTagInput(profile.player_tag);
-            fetchPlayer(profile.player_tag);
+            await fetchPlayer(profile.player_tag);
           }
         }
-      }catch(e){}
+      }catch(e){console.error('Session init error:',e);}
       setAuthLoading(false);
     };
     init();
@@ -694,11 +694,14 @@ export default function App(){
       const data=await crFetch(tag);
       if(!data.name) throw new Error("Player not found.");
       setPlayer(data);
-      if(authUser){
-        const {error}=await supabase.from('user_profiles').upsert({id:authUser.id,player_tag:tag,updated_at:new Date().toISOString()});
-        if(error) console.error('Save tag error:',error);
-        else console.log('Tag saved:',tag);
-      }
+      try{
+        const {data:{user}}=await supabase.auth.getUser();
+        if(user){
+          const {error}=await supabase.from('user_profiles').upsert({id:user.id,player_tag:tag,updated_at:new Date().toISOString()});
+          if(error) console.error('Save tag error:',error);
+          else console.log('Tag saved:',tag);
+        }
+      }catch(e){}
       const cards=(data.cards||[]).sort((a,b)=>(a.elixirCost||0)-(b.elixirCost||0));
       setAllCards(cards);
       console.log("[DEBUG] first 5 cards:", cards.slice(0,5).map(c=>({name:c.name,rarity:c.rarity,type:c.type,evolutionLevel:c.evolutionLevel})));
