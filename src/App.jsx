@@ -588,27 +588,8 @@ Give 2-3 sentences of strategic advice for this duo combo. Focus on timing and c
   return callAI("You are a Clash Royale 2v2 expert coach. Be concise.", prompt, null, 200);
 }
 
-function TwoV2Tab({ player1, allCards1 }) {
-  const [tag2Input, setTag2Input] = React.useState("");
-  const [player2, setPlayer2] = React.useState(null);
-  const [allCards2, setAllCards2] = React.useState([]);
-  const [twov2Decks, setTwov2Decks] = React.useState([]);
-  const [twov2Loading, setTwov2Loading] = React.useState(false);
-  const [twov2Error, setTwov2Error] = React.useState("");
+function TwoV2Tab({ player1, allCards1, player2, allCards2, onFetchPlayer2, tag2Input, setTag2Input, twov2Decks, setTwov2Decks, twov2Loading, setTwov2Loading, twov2Error, setTwov2Error }) {
   const [aiTips, setAiTips] = React.useState({});
-
-  const fetchPlayer2 = async () => {
-    const tag = tag2Input.trim().replace(/^#/, "").toUpperCase();
-    if (!tag) return;
-    setTwov2Error(""); setTwov2Loading(true);
-    try {
-      const data = await crFetch(tag);
-      if (!data.name) throw new Error("Player not found.");
-      setPlayer2(data);
-      setAllCards2((data.cards || []).sort((a, b) => (a.elixirCost || 0) - (b.elixirCost || 0)));
-    } catch(e) { setTwov2Error(`Failed: ${e.message}`); }
-    setTwov2Loading(false);
-  };
 
   const generateCombos = async () => {
     if (!player1 || !player2) return;
@@ -637,6 +618,8 @@ function TwoV2Tab({ player1, allCards1 }) {
       setAiTips(t => ({ ...t, [combo.id]: tip }));
     } catch(e) { setAiTips(t => ({ ...t, [combo.id]: null })); }
   };
+
+  const decks = twov2Decks || [];
 
   return (
     <div style={{flex:1, overflowY:"auto", padding:16}}>
@@ -668,13 +651,13 @@ function TwoV2Tab({ player1, allCards1 }) {
               <div style={{fontSize:14,fontWeight:700,color:"#64b5f6"}}>{player2.name}</div>
               <div style={{fontSize:11,color:"#444"}}>{player2.trophies?.toLocaleString()} 🏆 · {player2.arena?.name}</div>
             </div>
-            <button onClick={()=>{setPlayer2(null);setAllCards2([]);setTwov2Decks([]);setAiTips({});}} style={{padding:"4px 8px",background:"rgba(255,50,50,0.1)",border:"1px solid rgba(255,50,50,0.2)",borderRadius:4,color:"#ff5252",cursor:"pointer",fontSize:9,fontFamily:"'Rajdhani',sans-serif",fontWeight:700}}>CHANGE</button>
+            <button onClick={()=>{setTag2Input("");setTwov2Decks(null);setTwov2Error("");setAiTips({});onFetchPlayer2("__clear__");}} style={{padding:"4px 8px",background:"rgba(255,50,50,0.1)",border:"1px solid rgba(255,50,50,0.2)",borderRadius:4,color:"#ff5252",cursor:"pointer",fontSize:9,fontFamily:"'Rajdhani',sans-serif",fontWeight:700}}>CHANGE</button>
           </div>
         ) : (
           <div style={{display:"flex",gap:8,alignItems:"center"}}>
-            <input value={tag2Input} onChange={e=>setTag2Input(e.target.value)} onKeyDown={e=>e.key==="Enter"&&fetchPlayer2()} placeholder="#PARTNER TAG"
+            <input value={tag2Input} onChange={e=>setTag2Input(e.target.value)} onKeyDown={e=>e.key==="Enter"&&onFetchPlayer2()} placeholder="#PARTNER TAG"
               style={{flex:1,background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:8,padding:"9px 12px",color:"#ddd",fontFamily:"'Rajdhani',sans-serif",fontSize:12,outline:"none",letterSpacing:1}}/>
-            <button onClick={fetchPlayer2} disabled={twov2Loading||!tag2Input.trim()} style={{padding:"9px 14px",background:"linear-gradient(135deg,#1565c0,#0d47a1)",border:"none",borderRadius:8,color:"#fff",cursor:twov2Loading||!tag2Input.trim()?"default":"pointer",fontFamily:"'Bebas Neue',sans-serif",fontSize:12,letterSpacing:1,opacity:twov2Loading||!tag2Input.trim()?0.5:1}}>
+            <button onClick={()=>onFetchPlayer2()} disabled={twov2Loading||!tag2Input.trim()} style={{padding:"9px 14px",background:"linear-gradient(135deg,#1565c0,#0d47a1)",border:"none",borderRadius:8,color:"#fff",cursor:twov2Loading||!tag2Input.trim()?"default":"pointer",fontFamily:"'Bebas Neue',sans-serif",fontSize:12,letterSpacing:1,opacity:twov2Loading||!tag2Input.trim()?0.5:1}}>
               {twov2Loading?"...":"LINK"}
             </button>
           </div>
@@ -690,10 +673,10 @@ function TwoV2Tab({ player1, allCards1 }) {
         </button>
       )}
 
-      {twov2Decks.length>0&&(
+      {decks.length>0&&(
         <>
           <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:15,letterSpacing:1.5,color:"#ff9a40",marginBottom:10}}>BEST DUO COMBOS</div>
-          {twov2Decks.map((combo, idx)=>{
+          {decks.map((combo, idx)=>{
             const tierCol = getTierColor(combo.tier);
             const scoreColor = combo.matchScore>=80?"#4caf50":combo.matchScore>=60?"#ffd700":"#ff9800";
             const tip = aiTips[combo.id];
@@ -776,7 +759,7 @@ function TwoV2Tab({ player1, allCards1 }) {
           Link your account from the header first
         </div>
       )}
-      {player1&&!player2&&twov2Decks.length===0&&(
+      {player1&&!player2&&decks.length===0&&(
         <div style={{textAlign:"center",color:"#222",paddingTop:20,fontSize:12}}>
           <div style={{fontSize:28,marginBottom:8}}>👥</div>
           Enter your partner's tag above to find your best duo combos
@@ -880,6 +863,12 @@ export default function App(){
   const [profileOpen,setProfileOpen]=useState(false);
   const [profileTag,setProfileTag]=useState("");
   const [profileSaving,setProfileSaving]=useState(false);
+  const [tag2Input,setTag2Input]=useState('');
+  const [player2,setPlayer2]=useState(null);
+  const [allCards2,setAllCards2]=useState([]);
+  const [twov2Decks,setTwov2Decks]=useState(null);
+  const [twov2Loading,setTwov2Loading]=useState(false);
+  const [twov2Error,setTwov2Error]=useState('');
   const chatEnd=useRef(null);
   const scrollBottom=()=>setTimeout(()=>chatEnd.current?.scrollIntoView({behavior:"smooth"}),50);
 
@@ -983,6 +972,21 @@ export default function App(){
       player_tag:tag.replace('#','').toUpperCase(),
       updated_at:new Date().toISOString()
     });
+  };
+
+  const fetchPlayer2=async(tagOverride)=>{
+    if(tagOverride==="__clear__"){setPlayer2(null);setAllCards2([]);return;}
+    const tag=(tagOverride||tag2Input).trim().replace(/^#/,"").toUpperCase();
+    if(!tag) return;
+    if(tagOverride) setTag2Input(tag);
+    setTwov2Loading(true);setTwov2Error("");
+    try{
+      const data=await crFetch(tag);
+      if(!data.name) throw new Error("Player not found.");
+      setPlayer2(data);
+      setAllCards2((data.cards||[]).sort((a,b)=>(a.elixirCost||0)-(b.elixirCost||0)));
+    } catch(e){ setTwov2Error(`Failed: ${e.message}`); }
+    setTwov2Loading(false);
   };
 
   const handleLogout=async()=>{
@@ -1290,7 +1294,7 @@ export default function App(){
 
         {/* DUO */}
         {tab==="duo"&&(
-          <TwoV2Tab player1={player} allCards1={allCards}/>
+          <TwoV2Tab player1={player} allCards1={allCards} player2={player2} allCards2={allCards2} onFetchPlayer2={fetchPlayer2} tag2Input={tag2Input} setTag2Input={setTag2Input} twov2Decks={twov2Decks} setTwov2Decks={setTwov2Decks} twov2Loading={twov2Loading} setTwov2Loading={setTwov2Loading} twov2Error={twov2Error} setTwov2Error={setTwov2Error}/>
         )}
 
         {/* CHAT */}
