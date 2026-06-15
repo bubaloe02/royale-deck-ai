@@ -23,7 +23,7 @@ DEBUG             = True
 DEBUG_FORCE_PLAY  = True
 DEBUG_NO_JITTER   = True
 DEBUG_SAVE_COORDS = True
-BATTLE_DEBOUNCE   = 2
+BATTLE_DEBOUNCE   = 1
 
 # ─── PLAYER CONFIG ───────────────────────────────────────────────────────────
 # Your Clash Royale player tag WITHOUT the leading #.
@@ -1121,7 +1121,7 @@ class RoyaleBot:
                     break
 
                 if not is_in_battle(screen):
-                    time.sleep(1)
+                    time.sleep(0.05)
                     continue
 
                 # HP sampling + systems update
@@ -1313,9 +1313,17 @@ class RoyaleBot:
                     self._battle_confirm = 0
                     self.log("🏠 Home screen — starting battle!")
                     self.find_and_tap_battle(screen)
-                    wait = random.randint(20, 45)
-                    self.log(f"⏳ Matchmaking... waiting {wait}s")
-                    time.sleep(wait)
+                    self.log("⏳ Waiting for battle to start...")
+                    _mm_start = time.time()
+                    while self.running and time.time() - _mm_start < 60:
+                        scr = screenshot()
+                        if is_in_battle(scr):
+                            self.log("⚔️ Battle detected — entering!")
+                            break
+                        if is_matchmaking(scr):
+                            time.sleep(0.5)
+                        else:
+                            time.sleep(0.2)
                 elif is_matchmaking(screen):
                     self._battle_confirm = 0
                     self.log("⏳ Matchmaking queue...")
