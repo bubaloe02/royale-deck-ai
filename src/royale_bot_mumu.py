@@ -792,13 +792,25 @@ def is_in_battle(screen):
     return _elixir_purple_count(screen) > 80
 
 def find_ok_button(screen):
+    """
+    Locate the OK/continue button on the result screen.
+    Tries a tight HSV range first; falls back to a wider range to handle
+    emulator colour shifts and DPI differences.
+    TODO: replace with template matching for full robustness.
+    """
     h, w = screen.shape[:2]
-    y0, y1 = int(h * 0.65), int(h * 0.82)
-    x0, x1 = int(w * 0.25), int(w * 0.75)
+    y0, y1 = int(h * 0.55), int(h * 0.85)
+    x0, x1 = int(w * 0.20), int(w * 0.80)
     region = screen[y0:y1, x0:x1]
     hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+
+    # Tight range — high confidence
     blue = cv2.inRange(hsv, (100, 180, 180), (125, 255, 255))
     if cv2.countNonZero(blue) < 150:
+        # Wider fallback — handles minor colour/DPI shifts
+        blue = cv2.inRange(hsv, (95, 100, 120), (130, 255, 255))
+
+    if cv2.countNonZero(blue) < 80:
         return None
     M = cv2.moments(blue)
     if M["m00"] == 0:
@@ -844,6 +856,27 @@ def is_matchmaking(screen):
     r1 = cv2.inRange(hsv, (0,   150, 150), (10,  255, 255))
     r2 = cv2.inRange(hsv, (170, 150, 150), (180, 255, 255))
     return cv2.countNonZero(r1) + cv2.countNonZero(r2) > 200
+
+# ─── SCREEN STATE MACHINE ─────────────────────────────────────────────────────
+_STATE_BATTLE      = "battle"
+_STATE_RESULT      = "result"
+_STATE_HOME        = "home"
+_STATE_MATCHMAKING = "matchmaking"
+_STATE_LOADING     = "loading"
+_STATE_UNKNOWN     = "unknown"
+
+def detect_screen_state(screen):
+    """
+    Classify the current screen into one of five known states.
+    Order matters: battle check before result, result before home.
+    The bot reacts only to what it sees — no timing assumptions.
+    """
+    if is_in_battle(screen):     return _STATE_BATTLE
+    if is_battle_ended(screen):  return _STATE_RESULT
+    if is_on_home_screen(screen): return _STATE_HOME
+    if is_matchmaking(screen):   return _STATE_MATCHMAKING
+    if is_loading(screen):       return _STATE_LOADING
+    return _STATE_UNKNOWN
 
 # ─── TOWER HP DETECTION ──────────────────────────────────────────────────────
 
@@ -1030,9 +1063,10 @@ class RoyaleBot:
         self.on_status = on_status
         self.screen_w = None
         self.screen_h = None
-        self._battle_confirm = 0
-        self._coords_saved   = False
-        self._cached_deck    = None   # refreshed every 5 battles
+        self._battle_confirm  = 0
+        self._coords_saved    = False
+        self._cached_deck     = None   # refreshed every 5 battles
+        self._break_taken_at  = -1    # tracks which battle count last triggered a break
 
     def _get_deck(self):
         if self._cached_deck is None or self.battles_played % 5 == 0:
@@ -1054,25 +1088,26 @@ class RoyaleBot:
         time.sleep(2)
 
     def dismiss_result(self):
-        w, h = self.screen_w, self.screen_h
-        fallback_x = int(w * 0.50)
-        fallback_y = int(h * 0.73)
-
-        time.sleep(2)
-        for i in range(6):
+        """Tap OK whenever visible; return as soon as home screen appears."""
+        self.log("⏳ Dismissing result screen...")
+        timeout = time.time() + 30
+        while self.running and time.time() < timeout:
             try:
                 scr = screenshot()
+                if is_on_home_screen(scr):
+                    self.log("✅ Back on home screen.")
+                    return
                 btn = find_ok_button(scr)
                 if btn:
-                    tap(btn[0], btn[1])
-                    self.log(f"👆 Dismiss {i+1}/6 → button at {btn}")
+                    self.log(f"👆 OK at {btn}")
+                    tap(*btn)
+                    time.sleep(0.8)
                 else:
-                    tap(fallback_x, fallback_y)
-                    self.log(f"👆 Dismiss {i+1}/6 → fallback ({fallback_x},{fallback_y})")
+                    time.sleep(0.2)
             except Exception as e:
-                tap(fallback_x, fallback_y)
-                self.log(f"👆 Dismiss {i+1}/6 → err ({e})")
-            time.sleep(1.2)
+                self.log(f"Dismiss error: {e}")
+                time.sleep(0.2)
+        self.log("⚠️ Result dismissal timed out.")
 
     def play_battle(self):
         deck        = self._get_deck()
@@ -1283,7 +1318,6 @@ class RoyaleBot:
             self.losses += 1
         self.battles_played += 1
 
-        self.dismiss_result()
         return result == "win"
 
     def run(self):
@@ -1303,51 +1337,69 @@ class RoyaleBot:
         while self.running:
             try:
                 screen = screenshot()
+                state  = detect_screen_state(screen)
 
-                if is_in_battle(screen):
+                if state == _STATE_BATTLE:
                     self._battle_confirm += 1
                     if self._battle_confirm >= BATTLE_DEBOUNCE:
                         self._battle_confirm = 0
                         self.play_battle()
-                elif is_on_home_screen(screen):
+
+                elif state == _STATE_RESULT:
                     self._battle_confirm = 0
-                    self.log("🏠 Home screen — starting battle!")
+                    btn = find_ok_button(screen)
+                    if btn:
+                        self.log(f"👆 Dismiss result at {btn}")
+                        tap(*btn)
+                        time.sleep(0.8)
+                    else:
+                        time.sleep(0.2)
+
+                elif state == _STATE_HOME:
+                    self._battle_confirm = 0
+                    self.log("🏠 Home — tapping Battle")
                     self.find_and_tap_battle(screen)
-                    self.log("⏳ Waiting for battle to start...")
+                    # Poll until the battle loads — no blind sleep
+                    self.log("⏳ Waiting for battle...")
                     _mm_start = time.time()
                     while self.running and time.time() - _mm_start < 60:
                         scr = screenshot()
                         if is_in_battle(scr):
-                            self.log("⚔️ Battle detected — entering!")
+                            self.log("⚔️ Battle started!")
                             break
                         if is_matchmaking(scr):
                             time.sleep(0.5)
                         else:
                             time.sleep(0.2)
-                elif is_matchmaking(screen):
+
+                elif state == _STATE_MATCHMAKING:
                     self._battle_confirm = 0
-                    self.log("⏳ Matchmaking queue...")
-                    time.sleep(5)
-                elif is_loading(screen):
+                    self.log("⏳ Matchmaking...")
+                    time.sleep(0.5)
+
+                elif state == _STATE_LOADING:
                     self._battle_confirm = 0
-                    self.log("⏳ Loading...")
-                    time.sleep(3)
-                else:
+                    time.sleep(0.3)
+
+                else:  # _STATE_UNKNOWN
                     self._battle_confirm = 0
                     self.log("🔍 Unknown screen — debug screenshot saved")
                     save_screenshot(r"C:\debug_screen.png")
-                    time.sleep(3)
+                    time.sleep(2)
 
-                time.sleep(random.uniform(2, 5))
-
-                if self.battles_played > 0 and self.battles_played % 10 == 0:
+                # Anti-detection break every 10 battles (guard against re-trigger)
+                b = self.battles_played
+                if (b > 0 and b % 10 == 0 and b != self._break_taken_at):
+                    self._break_taken_at = b
                     brk = random.randint(120, 300)
                     self.log(f"☕ Anti-detection break: {brk}s")
                     time.sleep(brk)
 
+                time.sleep(0.1)
+
             except Exception as e:
                 self.log(f"Main loop error: {e}")
-                time.sleep(5)
+                time.sleep(2)
 
         self.log("⏹️ Bot stopped.")
 
