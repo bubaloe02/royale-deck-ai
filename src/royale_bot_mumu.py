@@ -99,15 +99,17 @@ def is_in_battle(screen):
 
 def is_battle_ended(screen):
     """
-    Detect post-battle result screen by finding the blue OK button
-    at bottom-center (~83-92% height, 30-70% width).
-    Much more reliable than a bright-pixel count on a dark background.
+    Detect post-battle result screen by finding the blue OK button.
+    The button is a bright, highly-saturated blue — tighter HSV range than
+    card-slot backgrounds (which are dark purple-blue and won't match).
+    Region: bottom-center 85-91% height, 35-65% width.
     """
     h, w = screen.shape[:2]
-    region = screen[int(h * 0.83):int(h * 0.92), int(w * 0.30):int(w * 0.70)]
+    region = screen[int(h * 0.85):int(h * 0.91), int(w * 0.35):int(w * 0.65)]
     hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
-    blue = cv2.inRange(hsv, (100, 150, 150), (130, 255, 255))
-    return cv2.countNonZero(blue) > 200
+    # Bright saturated blue only — excludes dark card-slot purple
+    blue = cv2.inRange(hsv, (100, 180, 180), (125, 255, 255))
+    return cv2.countNonZero(blue) > 400
 
 def did_win(screen):
     """
@@ -433,9 +435,12 @@ class RoyaleBot:
             if not self.running:
                 break
             try:
-                screen = screenshot()  # single capture reused for all checks
+                screen    = screenshot()  # single capture reused for all checks
+                game_time = time.time() - battle_start
 
-                if is_battle_ended(screen):
+                # Battles cannot end in under 20 s — guard prevents false triggers
+                # from blue card-slot backgrounds matching the OK button detector
+                if game_time > 20 and is_battle_ended(screen):
                     result = "win" if did_win(screen) else "loss"
                     self.log(f"{'🏆 WIN' if result == 'win' else '💀 LOSS'}!")
                     break
@@ -447,8 +452,7 @@ class RoyaleBot:
                 # Tower HP snapshot (every 10 s)
                 replay.maybe_sample_hp(screen)
 
-                elixir    = get_elixir(screen)
-                game_time = time.time() - battle_start
+                elixir = get_elixir(screen)
 
                 if DEBUG:
                     hp = replay.tower_hp_timeline[-1] if replay.tower_hp_timeline else {}
