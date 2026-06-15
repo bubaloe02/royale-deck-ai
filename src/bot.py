@@ -13,16 +13,6 @@ from datetime import datetime
 WORKER_URL = "https://small-king-a65c.jared1999.workers.dev"
 ADB = r"C:\adb\platform-tools\adb.exe"
 DEVICE = "127.0.0.1:7555"
-SCREEN_WIDTH = 1280
-SCREEN_HEIGHT = 720
-
-# Card hand positions (bottom of screen)
-CARD_POSITIONS = {
-    0: (320, 650),
-    1: (427, 650),
-    2: (534, 650),
-    3: (641, 650),
-}
 
 # ─── ADB CONTROLLER ──────────────────────────────────────────────────────────
 
@@ -54,72 +44,109 @@ def key_event(keycode):
     adb_cmd(["shell", "input", "keyevent", str(keycode)])
 
 # ─── SCREEN DETECTION ────────────────────────────────────────────────────────
+# All detection uses proportional coordinates (fractions of h/w) so the bot
+# works at any emulator resolution and orientation.
 
 def is_on_home_screen(screen):
-    """
-    Detect the Battle button by its golden-yellow color using HSV.
-
-    The button occupies the lower-center portion of the screen.
-    HSV hue ~20-35 (orange-yellow), high saturation and brightness.
-    Using proportional coordinates so this works at any device resolution.
-    """
+    """Battle button: golden-yellow band in lower-center of screen."""
     h, w = screen.shape[:2]
-
-    # Lower-center strip where the Battle button lives (~65-90% height, 20-80% width)
-    y1, y2 = int(h * 0.65), int(h * 0.90)
-    x1, x2 = int(w * 0.20), int(w * 0.80)
-    battle_region = screen[y1:y2, x1:x2]
-
-    hsv = cv2.cvtColor(battle_region, cv2.COLOR_BGR2HSV)
-
-    # Golden-yellow: hue 18–38, saturation >160, value >160
-    yellow_mask = cv2.inRange(hsv, (18, 160, 160), (38, 255, 255))
-
-    pixel_count = cv2.countNonZero(yellow_mask)
-    return pixel_count > 400
-
+    region = screen[int(h * 0.65):int(h * 0.90), int(w * 0.20):int(w * 0.80)]
+    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+    yellow = cv2.inRange(hsv, (18, 160, 160), (38, 255, 255))
+    return cv2.countNonZero(yellow) > 400
 
 def is_in_battle(screen):
-    """Check if in battle by looking for purple elixir bar"""
-    elixir_region = screen[670:710, 40:360]
-    purple_mask = cv2.inRange(elixir_region, (80, 0, 80), (220, 80, 220))
-    return cv2.countNonZero(purple_mask) > 100
+    """Purple elixir bar at the bottom-left of the screen."""
+    h, w = screen.shape[:2]
+    region = screen[int(h * 0.86):int(h * 0.93), int(w * 0.05):int(w * 0.55)]
+    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+    # Purple/violet in OpenCV HSV: hue 130-160
+    purple = cv2.inRange(hsv, (130, 60, 60), (160, 255, 255))
+    return cv2.countNonZero(purple) > 80
 
 def is_battle_ended(screen):
-    """Check if battle result screen showing"""
-    result_region = screen[200:350, 350:930]
-    gray = cv2.cvtColor(result_region, cv2.COLOR_BGR2GRAY)
+    """Victory/Defeat banner floods the center of the screen with bright pixels."""
+    h, w = screen.shape[:2]
+    region = screen[int(h * 0.20):int(h * 0.50), int(w * 0.10):int(w * 0.90)]
+    gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
     bright = cv2.countNonZero(cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)[1])
-    return bright > 5000
+    total_pixels = region.shape[0] * region.shape[1]
+    return bright > total_pixels * 0.30
 
 def did_win(screen):
-    """Determine if we won by comparing crown counts"""
-    our_crowns = screen[30:80, 100:400]
-    their_crowns = screen[30:80, 880:1180]
-    our_gold = cv2.countNonZero(cv2.inRange(our_crowns, (0, 150, 150), (50, 255, 255)))
-    their_gold = cv2.countNonZero(cv2.inRange(their_crowns, (0, 150, 150), (50, 255, 255)))
+    """Compare golden crown pixels on our side vs their side at top of screen."""
+    h, w = screen.shape[:2]
+    ours = screen[int(h * 0.02):int(h * 0.08), int(w * 0.05):int(w * 0.40)]
+    theirs = screen[int(h * 0.02):int(h * 0.08), int(w * 0.60):int(w * 0.95)]
+    our_gold = cv2.countNonZero(cv2.inRange(ours, (0, 150, 150), (50, 255, 255)))
+    their_gold = cv2.countNonZero(cv2.inRange(theirs, (0, 150, 150), (50, 255, 255)))
     return our_gold > their_gold
 
 def get_elixir(screen):
-    """Estimate elixir 0-10 from purple bar"""
-    elixir_region = screen[680:700, 50:350]
-    purple_mask = cv2.inRange(elixir_region, (100, 0, 100), (200, 50, 200))
-    return min(10, int(cv2.countNonZero(purple_mask) / 30))
+    """Estimate elixir 0-10 from width of purple bar."""
+    h, w = screen.shape[:2]
+    region = screen[int(h * 0.87):int(h * 0.92), int(w * 0.05):int(w * 0.55)]
+    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+    purple = cv2.inRange(hsv, (130, 60, 60), (160, 255, 255))
+    return min(10, int(cv2.countNonZero(purple) / 15))
 
 def is_loading(screen):
-    """Check if screen is mostly dark (loading)"""
+    """Screen is mostly dark (loading/transitioning)."""
+    h, w = screen.shape[:2]
     gray = cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY)
     very_dark = cv2.countNonZero(cv2.threshold(gray, 20, 255, cv2.THRESH_BINARY_INV)[1])
-    return very_dark > (SCREEN_WIDTH * SCREEN_HEIGHT * 0.7)
+    return very_dark > (w * h * 0.7)
 
 def is_matchmaking(screen):
-    """Check if in matchmaking lobby"""
-    # Look for cancel button (red) at bottom
-    cancel_region = screen[580:660, 450:830]
-    red_mask = cv2.inRange(cancel_region, (0, 0, 150), (80, 80, 255))
-    return cv2.countNonZero(red_mask) > 200
+    """Red cancel button at bottom-center during matchmaking."""
+    h, w = screen.shape[:2]
+    region = screen[int(h * 0.78):int(h * 0.90), int(w * 0.25):int(w * 0.75)]
+    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+    red1 = cv2.inRange(hsv, (0, 150, 150), (10, 255, 255))
+    red2 = cv2.inRange(hsv, (170, 150, 150), (180, 255, 255))
+    return cv2.countNonZero(red1) + cv2.countNonZero(red2) > 200
 
-# ─── BATTLE LOGIC ────────────────────────────────────────────────────────────
+# ─── PROPORTIONAL COORDINATES ────────────────────────────────────────────────
+
+def get_card_tap_positions(w, h):
+    """Four card slots at the bottom of a portrait screen."""
+    y = int(h * 0.885)
+    return {
+        0: (int(w * 0.18), y),
+        1: (int(w * 0.36), y),
+        2: (int(w * 0.54), y),
+        3: (int(w * 0.72), y),
+    }
+
+def get_play_position(card_index, game_time, w, h):
+    """Where to drop the card on the arena (portrait coordinates)."""
+    if game_time < 90:
+        # Early game: play defensively near the bridge
+        positions = [
+            (0.50, 0.62), (0.38, 0.60), (0.62, 0.60),
+            (0.50, 0.70), (0.38, 0.68), (0.62, 0.68),
+        ]
+    else:
+        # Double elixir: push into opponent territory
+        positions = [
+            (0.50, 0.52), (0.38, 0.50), (0.62, 0.50),
+            (0.50, 0.58), (0.38, 0.56), (0.62, 0.56),
+        ]
+    px, py = random.choice(positions)
+    x = int(px * w) + random.randint(-15, 15)
+    y = int(py * h) + random.randint(-10, 10)
+    return x, y
+
+def should_play(elixir, last_play_time, cards_played):
+    if elixir < 4:
+        return False, None
+    if time.time() - last_play_time < 2.0:
+        return False, None
+    if random.random() < 0.25:
+        return False, None
+    return True, cards_played % 4
+
+# ─── BATTLE STATE ────────────────────────────────────────────────────────────
 
 class BattleState:
     def __init__(self):
@@ -128,31 +155,6 @@ class BattleState:
         self.start_time = time.time()
         self.last_play_time = 0
         self.cards_played = 0
-
-def get_play_position(card_index, elixir, game_time):
-    """Rule-based placement strategy"""
-    if game_time < 90:
-        positions = [
-            (640, 320), (580, 315), (700, 315),
-            (640, 450), (580, 450), (700, 450),
-        ]
-    else:
-        positions = [
-            (640, 300), (580, 295), (700, 295),
-            (640, 310), (600, 310), (680, 310),
-        ]
-    pos = random.choice(positions)
-    return pos[0] + random.randint(-15, 15), pos[1] + random.randint(-10, 10)
-
-def should_play(elixir, last_play_time, cards_played):
-    """Decide whether to play a card"""
-    if elixir < 4:
-        return False, None
-    if time.time() - last_play_time < 2.0:
-        return False, None
-    if random.random() < 0.25:
-        return False, None
-    return True, cards_played % 4
 
 # ─── MAIN BOT ────────────────────────────────────────────────────────────────
 
@@ -163,6 +165,8 @@ class RoyaleBot:
         self.wins = 0
         self.losses = 0
         self.on_status = on_status
+        self.screen_w = None
+        self.screen_h = None
 
     def log(self, msg):
         ts = datetime.now().strftime("%H:%M:%S")
@@ -186,28 +190,28 @@ class RoyaleBot:
             self.log(f"⚠️ Send error: {e}")
 
     def find_and_tap_battle(self, screen):
-        """Tap the battle button using proportional coordinates"""
         h, w = screen.shape[:2]
-        # Battle button is at ~77% height, ~40% width (left of the trophy icon)
         bx = int(w * 0.40)
         by = int(h * 0.77)
-        self.log(f"🎮 Tapping battle button at ({bx}, {by})...")
+        self.log(f"🎮 Tapping battle button at ({bx}, {by}) on {w}x{h} screen...")
         tap(bx, by)
         time.sleep(2)
 
     def dismiss_result(self):
-        """Dismiss battle result and return to home"""
+        w, h = self.screen_w, self.screen_h
         time.sleep(2)
-        tap(640, 550)
+        tap(int(w * 0.50), int(h * 0.60))
         time.sleep(1)
-        tap(640, 600)
+        tap(int(w * 0.50), int(h * 0.65))
         time.sleep(2)
 
     def play_battle(self):
-        """Play one full battle"""
         state = BattleState()
         self.log(f"⚔️ Battle #{self.battles_played + 1} started!")
         battle_start = time.time()
+        w, h = self.screen_w, self.screen_h
+        card_positions = get_card_tap_positions(w, h)
+        self.log(f"🃏 Card tap positions: {card_positions}")
 
         while time.time() - battle_start < 250:
             if not self.running:
@@ -237,16 +241,16 @@ class RoyaleBot:
 
                 if should and card_idx is not None:
                     phase = "early" if game_time < 90 else "double"
-                    x, y = get_play_position(card_idx, elixir, game_time)
+                    x, y = get_play_position(card_idx, game_time, w, h)
 
-                    tap(CARD_POSITIONS[card_idx][0], CARD_POSITIONS[card_idx][1])
+                    tap(card_positions[card_idx][0], card_positions[card_idx][1])
                     time.sleep(random.uniform(0.15, 0.35))
                     tap(x, y)
 
                     state.placements.append({
                         "card_slot": card_idx,
-                        "x": round(x / SCREEN_WIDTH, 3),
-                        "y": round(y / SCREEN_HEIGHT, 3),
+                        "x": round(x / w, 3),
+                        "y": round(y / h, 3),
                         "elixir_at_play": elixir,
                         "game_time_ms": int(game_time * 1000),
                         "phase": phase,
@@ -270,6 +274,11 @@ class RoyaleBot:
         subprocess.run([ADB, "connect", DEVICE], capture_output=True)
         time.sleep(1)
 
+        # Detect screen dimensions once from the first screenshot
+        first = screenshot()
+        self.screen_h, self.screen_w = first.shape[:2]
+        self.log(f"📐 Screen detected: {self.screen_w}x{self.screen_h}")
+
         while self.running:
             try:
                 screen = screenshot()
@@ -289,13 +298,12 @@ class RoyaleBot:
                     self.log("⏳ Loading...")
                     time.sleep(3)
                 else:
-                    self.log("🔍 Unknown screen — taking debug screenshot...")
+                    self.log("🔍 Unknown screen — saving debug screenshot...")
                     save_screenshot(r"C:\debug_screen.png")
                     time.sleep(3)
 
                 time.sleep(random.uniform(2, 5))
 
-                # Long break every 10 battles
                 if self.battles_played > 0 and self.battles_played % 10 == 0:
                     long_break = random.randint(120, 300)
                     self.log(f"☕ Anti-detection break: {long_break}s")
@@ -328,7 +336,6 @@ try:
             self.root.geometry("500x640")
             self.root.resizable(False, False)
 
-            # Header
             header = ctk.CTkFrame(self.root, fg_color="#0a0a1a", corner_radius=0)
             header.pack(fill="x")
             ctk.CTkLabel(header, text="👑 ROYALE BOT AI",
@@ -336,7 +343,6 @@ try:
             ctk.CTkLabel(header, text="MuMu Player · Port 7555 · Anti-detection active",
                 font=("Arial", 11), text_color="#333").pack(pady=2)
 
-            # Status
             sf = ctk.CTkFrame(self.root, fg_color="#111122")
             sf.pack(fill="x", padx=20, pady=10)
             self.dot = ctk.CTkLabel(sf, text="⬤", font=("Arial", 16), text_color="#ff5252")
@@ -344,7 +350,6 @@ try:
             self.status_lbl = ctk.CTkLabel(sf, text="Stopped", font=("Arial", 13))
             self.status_lbl.pack(side="left", pady=8)
 
-            # Stats
             stats = ctk.CTkFrame(self.root, fg_color="#0d0d1f")
             stats.pack(fill="x", padx=20, pady=5)
             stats.grid_columnconfigure((0,1,2), weight=1)
@@ -367,7 +372,6 @@ try:
             ctk.CTkLabel(self.root, textvariable=self.wr_var,
                 font=("Arial", 13), text_color="#ffd700").pack(pady=3)
 
-            # Log
             lf = ctk.CTkFrame(self.root, fg_color="#050510")
             lf.pack(fill="both", expand=True, padx=20, pady=5)
             ctk.CTkLabel(lf, text="BOT LOG", font=("Arial", 10, "bold"), text_color="#333").pack(anchor="w", padx=8, pady=4)
@@ -375,7 +379,6 @@ try:
                 fg_color="#030308", text_color="#4caf50", height=200)
             self.log_box.pack(fill="both", expand=True, padx=5, pady=5)
 
-            # Buttons
             bf = ctk.CTkFrame(self.root, fg_color="transparent")
             bf.pack(fill="x", padx=20, pady=8)
             bf.grid_columnconfigure((0,1), weight=1)
