@@ -15,14 +15,90 @@ import threading
 WORKER_URL   = "https://small-king-a65c.jared1999.workers.dev"
 ADB          = r"C:\adb\platform-tools\adb.exe"
 DEVICE       = "127.0.0.1:7555"
-REPLAY_DIR   = r"C:\royale_replays"   # local JSON backup folder
+REPLAY_DIR   = r"C:\royale_replays"
 
-# ─── DEBUG FLAGS (set all True while tuning, False for live play) ─────────────
-DEBUG             = True   # verbose elixir + coordinate logging
+# ─── DEBUG FLAGS ─────────────────────────────────────────────────────────────
+DEBUG             = True   # verbose logging
 DEBUG_FORCE_PLAY  = True   # ignore elixir/cooldown, always play
 DEBUG_NO_JITTER   = True   # disable tap jitter
 DEBUG_SAVE_COORDS = True   # write coord overlay on first battle
 BATTLE_DEBOUNCE   = 2      # consecutive frames needed to confirm battle
+
+# ─── CARD TYPE REGISTRY ──────────────────────────────────────────────────────
+# Map card name → type. Expand this as you identify your deck.
+# Until template matching lands, slots map to "slot_0".."slot_3" (type "troop").
+CARD_TYPES = {
+    # Troops
+    "Knight":           "troop",
+    "Hog Rider":        "troop",
+    "Musketeer":        "troop",
+    "Mini P.E.K.K.A":  "troop",
+    "Valkyrie":         "troop",
+    "Baby Dragon":      "troop",
+    "Mega Minion":      "troop",
+    "Prince":           "troop",
+    "Giant":            "troop",
+    "Goblin Gang":      "troop",
+    "Skeleton Army":    "troop",
+    # Buildings
+    "Tesla":            "building",
+    "Cannon":           "building",
+    "Inferno Tower":    "building",
+    "Bomb Tower":       "building",
+    "X-Bow":            "building",
+    "Mortar":           "building",
+    # Spells
+    "Fireball":         "spell",
+    "Arrows":           "spell",
+    "Zap":              "spell",
+    "Lightning":        "spell",
+    "Rocket":           "spell",
+    "Goblin Barrel":    "spell",
+    "Freeze":           "spell",
+    "Poison":           "spell",
+}
+
+def card_type(card_name):
+    """Return type for a card name, defaulting to 'troop' for unknown cards."""
+    return CARD_TYPES.get(card_name, "troop")
+
+# ─── NAMED TILE COORDINATES (proportional) ───────────────────────────────────
+# All positions are (x_frac, y_frac) of screen size.
+# y < 0.50 = opponent territory, y > 0.50 = player territory.
+TILES = {
+    # Bridge pressure — just past the river
+    "bridge_left":      (0.22, 0.54),
+    "bridge_right":     (0.78, 0.54),
+    "bridge_center":    (0.50, 0.54),
+    # Support — slightly behind bridge
+    "support_left":     (0.22, 0.63),
+    "support_right":    (0.78, 0.63),
+    "support_center":   (0.50, 0.63),
+    # Defensive buildings — deep own side
+    "defense_left":     (0.22, 0.74),
+    "defense_right":    (0.78, 0.74),
+    "defense_center":   (0.50, 0.72),
+    # Push tiles — enemy territory, double-elixir aggression
+    "push_left":        (0.22, 0.44),
+    "push_right":       (0.78, 0.44),
+    "push_center":      (0.50, 0.44),
+    # Spell targets — mid-to-enemy territory
+    "spell_left":       (0.22, 0.42),
+    "spell_right":      (0.78, 0.42),
+    "spell_center":     (0.50, 0.42),
+    # King tower activation
+    "king_activate":    (0.50, 0.80),
+}
+
+TROOP_TILES_EARLY = ["bridge_left", "bridge_right", "bridge_center",
+                     "support_left", "support_right"]
+TROOP_TILES_LATE  = ["bridge_left", "bridge_right", "push_left", "push_right",
+                     "bridge_center"]
+BUILDING_TILES    = ["defense_left", "defense_right", "defense_center"]
+SPELL_TILES       = ["spell_left", "spell_right", "spell_center"]
+
+ARENA_X_MIN, ARENA_X_MAX = 0.05, 0.95
+ARENA_Y_MIN, ARENA_Y_MAX = 0.15, 0.80
 
 # ─── ADB CONTROLLER ──────────────────────────────────────────────────────────
 
@@ -37,8 +113,8 @@ def tap(x, y):
     adb_cmd(["shell", "input", "tap", str(x + jx), str(y + jy)])
     time.sleep(random.uniform(0.05, 0.15))
 
-def drag(x1, y1, x2, y2, duration_ms=400):
-    """Swipe from card slot to arena — required for CR card placement."""
+def drag(x1, y1, x2, y2, duration_ms=150):
+    """Swipe from card slot to arena position."""
     jx, jy = _jitter()
     adb_cmd([
         "shell", "input", "swipe",
@@ -46,7 +122,7 @@ def drag(x1, y1, x2, y2, duration_ms=400):
         str(x2), str(y2),
         str(duration_ms),
     ])
-    time.sleep(random.uniform(0.1, 0.25))
+    time.sleep(random.uniform(0.1, 0.2))
 
 def screenshot():
     result = adb_cmd(["exec-out", "screencap", "-p"])
@@ -62,6 +138,52 @@ def save_screenshot(path=r"C:\debug_screen.png"):
 def key_event(keycode):
     adb_cmd(["shell", "input", "keyevent", str(keycode)])
 
+# ─── PLACEMENT LOGIC ─────────────────────────────────────────────────────────
+
+def get_tile_pos(tile_name, w, h):
+    """Resolve a named tile to pixel coordinates, clamped to arena bounds."""
+    px, py = TILES[tile_name]
+    jx = 0 if DEBUG_NO_JITTER else random.randint(-10, 10)
+    jy = 0 if DEBUG_NO_JITTER else random.randint(-8, 8)
+    x = int(px * w) + jx
+    y = int(py * h) + jy
+    x = max(int(ARENA_X_MIN * w), min(int(ARENA_X_MAX * w), x))
+    y = max(int(ARENA_Y_MIN * h), min(int(ARENA_Y_MAX * h), y))
+    return x, y
+
+def get_play_position(card_name, game_time, w, h):
+    """
+    Dispatch to the right tile pool based on card type and game phase.
+    Returns (x, y) or None if there is no valid target (e.g. spell too early).
+    """
+    ctype = card_type(card_name)
+    late  = game_time >= 90
+
+    if ctype == "troop":
+        pool = TROOP_TILES_LATE if late else TROOP_TILES_EARLY
+    elif ctype == "building":
+        pool = BUILDING_TILES
+    elif ctype == "spell":
+        # Don't waste spells in the first 20 s — no valid clump yet
+        if game_time < 20:
+            return None
+        pool = SPELL_TILES
+    else:
+        pool = TROOP_TILES_EARLY
+
+    return get_tile_pos(random.choice(pool), w, h)
+
+def should_play(elixir, last_play_time, cards_played):
+    if DEBUG_FORCE_PLAY:
+        return True, cards_played % 4
+    if elixir < 4:
+        return False, None
+    if time.time() - last_play_time < 2.0:
+        return False, None
+    if random.random() < 0.25:
+        return False, None
+    return True, cards_played % 4
+
 # ─── DEBUG: coordinate overlay ───────────────────────────────────────────────
 
 def save_coord_overlay(screen, card_positions, play_samples, path=r"C:\debug_coords.png"):
@@ -70,10 +192,10 @@ def save_coord_overlay(screen, card_positions, play_samples, path=r"C:\debug_coo
         cv2.circle(img, (cx, cy), 18, (0, 255, 0), 3)
         cv2.putText(img, f"C{idx}", (cx - 12, cy - 22),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-    for (px, py) in play_samples:
+    for label, (px, py) in play_samples:
         cv2.circle(img, (px, py), 12, (0, 0, 255), 2)
-        cv2.putText(img, "X", (px - 7, py + 6),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+        cv2.putText(img, label[:4], (px - 14, py + 6),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1)
     cv2.imwrite(path, img)
     print(f"Coord overlay saved to {path}")
 
@@ -97,45 +219,39 @@ def _elixir_purple_count(screen):
 def is_in_battle(screen):
     return _elixir_purple_count(screen) > 80
 
-def is_battle_ended(screen):
-    """
-    Detect post-battle result screen by finding the blue OK button.
-    The button is a bright, highly-saturated blue — tighter HSV range than
-    card-slot backgrounds (which are dark purple-blue and won't match).
-    Region: bottom-center 85-91% height, 35-65% width.
-    """
-    h, w = screen.shape[:2]
-    region = screen[int(h * 0.85):int(h * 0.91), int(w * 0.35):int(w * 0.65)]
-    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
-    # Bright saturated blue only — excludes dark card-slot purple
-    blue = cv2.inRange(hsv, (100, 180, 180), (125, 255, 255))
-    return cv2.countNonZero(blue) > 400
-
 def find_ok_button(screen):
     """
-    Locate the blue OK button by finding its centroid in the lower screen area.
-    Returns (x, y) in full-screen coordinates, or None if not found.
+    Find the blue OK button centroid in the lower-center of the screen.
+    Searches 65-82% height, 25-75% width.
+    Returns (x, y) in full-screen coords or None.
     """
     h, w = screen.shape[:2]
-    region = screen[int(h * 0.80):int(h * 0.95), int(w * 0.20):int(w * 0.80)]
+    y0, y1 = int(h * 0.65), int(h * 0.82)
+    x0, x1 = int(w * 0.25), int(w * 0.75)
+    region = screen[y0:y1, x0:x1]
     hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
     blue = cv2.inRange(hsv, (100, 180, 180), (125, 255, 255))
-    if cv2.countNonZero(blue) < 100:
+    if cv2.countNonZero(blue) < 150:
         return None
     M = cv2.moments(blue)
     if M["m00"] == 0:
         return None
-    cx = int(M["m10"] / M["m00"]) + int(w * 0.20)
-    cy = int(M["m01"] / M["m00"]) + int(h * 0.80)
+    cx = int(M["m10"] / M["m00"]) + x0
+    cy = int(M["m01"] / M["m00"]) + y0
     return cx, cy
+
+def is_battle_ended(screen):
+    """Detect result screen by finding the blue OK button at 65-82% height."""
+    return find_ok_button(screen) is not None
 
 def did_win(screen):
     """
-    CR always places the WINNER at the bottom section and LOSER at the top.
-    The local player always has a BLUE banner; the opponent has RED/PINK.
-    → More blue pixels in the bottom band (60-68%) than top (30-38%) = we won.
-    → More blue at top = we lost.
-    This is immune to crown-count layout confusion.
+    CR always places WINNER at bottom, LOSER at top.
+    Local player always has a BLUE banner; opponent has RED/PINK.
+    → More blue pixels in bottom band (60-68%) than top (30-38%) = we won.
+
+    TODO: replace with OCR of "WINNER!" or player name matching for
+          higher accuracy once pytesseract is available.
     """
     h, w = screen.shape[:2]
     bottom = screen[int(h*0.60):int(h*0.68), int(w*0.10):int(w*0.90)]
@@ -148,7 +264,8 @@ def did_win(screen):
     bottom_blue = blue_px(bottom)
     top_blue    = blue_px(top)
     if DEBUG:
-        print(f"[did_win] bottom_blue={bottom_blue} top_blue={top_blue} → {'WIN' if bottom_blue > top_blue else 'LOSS'}")
+        print(f"[did_win] bottom_blue={bottom_blue} top_blue={top_blue} "
+              f"→ {'WIN' if bottom_blue > top_blue else 'LOSS'}")
     return bottom_blue > top_blue
 
 def get_elixir(screen):
@@ -169,21 +286,8 @@ def is_matchmaking(screen):
     return cv2.countNonZero(red1) + cv2.countNonZero(red2) > 200
 
 # ─── TOWER HP DETECTION ──────────────────────────────────────────────────────
-#
-# Portrait layout (proportional positions):
-#
-#   Opponent  king  :  x 35-65%,  y 12-16%
-#   Opponent  left  :  x  4-22%,  y 20-24%
-#   Opponent  right :  x 78-96%,  y 20-24%
-#   Our       king  :  x 35-65%,  y 82-86%
-#   Our       left  :  x  4-22%,  y 74-78%
-#   Our       right :  x 78-96%,  y 74-78%
-#
-# HP bars: green for ours, red/orange for theirs.
-# We measure the fraction of coloured pixels in the bar strip.
 
 _TOWER_REGIONS = {
-    # (y0, y1, x0, x1) as fractions of (h, w); hue range for HP bar colour
     "our_king":    (0.82, 0.86, 0.35, 0.65, "green"),
     "our_left":    (0.74, 0.78, 0.04, 0.22, "green"),
     "our_right":   (0.74, 0.78, 0.78, 0.96, "green"),
@@ -196,17 +300,14 @@ def _bar_fill_pct(region, colour):
     hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
     if colour == "green":
         mask = cv2.inRange(hsv, (40, 80, 80), (85, 255, 255))
-    else:  # red
+    else:
         m1 = cv2.inRange(hsv, (0,   120, 120), (10,  255, 255))
         m2 = cv2.inRange(hsv, (165, 120, 120), (180, 255, 255))
         mask = cv2.bitwise_or(m1, m2)
     total = region.shape[0] * region.shape[1]
-    if total == 0:
-        return 100
-    return round(cv2.countNonZero(mask) / total * 100, 1)
+    return round(cv2.countNonZero(mask) / total * 100, 1) if total else 100
 
 def sample_tower_hp(screen):
-    """Return dict with HP% (0-100) for all 6 towers."""
     h, w = screen.shape[:2]
     hp = {}
     for name, (y0, y1, x0, x1, colour) in _TOWER_REGIONS.items():
@@ -217,14 +318,13 @@ def sample_tower_hp(screen):
 # ─── LANE HELPER ─────────────────────────────────────────────────────────────
 
 def classify_lane(x_norm):
-    """Return 'left', 'center', or 'right' based on normalised x (0-1)."""
     if x_norm < 0.40:
         return "left"
     if x_norm > 0.60:
         return "right"
     return "center"
 
-# ─── PROPORTIONAL COORDINATES ────────────────────────────────────────────────
+# ─── CARD TAP POSITIONS ──────────────────────────────────────────────────────
 
 def get_card_tap_positions(w, h):
     y = int(h * 0.885)
@@ -235,79 +335,10 @@ def get_card_tap_positions(w, h):
         3: (int(w * 0.72), y),
     }
 
-ARENA_X_MIN, ARENA_X_MAX = 0.05, 0.95
-ARENA_Y_MIN, ARENA_Y_MAX = 0.15, 0.80
-
-def get_play_position(game_time, w, h):
-    if game_time < 90:
-        positions = [
-            (0.50, 0.62), (0.38, 0.60), (0.62, 0.60),
-            (0.50, 0.70), (0.38, 0.68), (0.62, 0.68),
-        ]
-    else:
-        positions = [
-            (0.50, 0.52), (0.38, 0.50), (0.62, 0.50),
-            (0.50, 0.58), (0.38, 0.56), (0.62, 0.56),
-        ]
-    px, py = random.choice(positions)
-    x = int(px * w) + (0 if DEBUG_NO_JITTER else random.randint(-15, 15))
-    y = int(py * h) + (0 if DEBUG_NO_JITTER else random.randint(-10, 10))
-    x = max(int(ARENA_X_MIN * w), min(int(ARENA_X_MAX * w), x))
-    y = max(int(ARENA_Y_MIN * h), min(int(ARENA_Y_MAX * h), y))
-    return x, y
-
-def should_play(elixir, last_play_time, cards_played):
-    if DEBUG_FORCE_PLAY:
-        return True, cards_played % 4
-    if elixir < 4:
-        return False, None
-    if time.time() - last_play_time < 2.0:
-        return False, None
-    if random.random() < 0.25:
-        return False, None
-    return True, cards_played % 4
-
 # ─── REPLAY LOGGER ───────────────────────────────────────────────────────────
 
 class ReplayLogger:
-    """
-    Accumulates all structured data for one battle and persists it.
-
-    Schema
-    ------
-    battle_id       : str   unique per match
-    started_at      : str   ISO-8601 UTC
-    result          : str   "win" | "loss" | "unknown"
-    duration_ms     : int
-    source          : str   "bot_mumu"
-
-    our_deck        : list[str]   card names when template-matching lands;
-                                  slot indices ("slot_0" … "slot_3") for now
-
-    placements      : list of {
-        card_slot    : int        0-3 hand position
-        card_name    : str|null   filled when template matching is ready
-        game_time_ms : int
-        x_norm       : float      0-1 fraction of screen width
-        y_norm       : float      0-1 fraction of screen height
-        lane         : str        "left" | "center" | "right"
-        side         : str        "ours"  (opponent detection = future work)
-        elixir       : int        estimated elixir at time of play
-        phase        : str        "early" | "double"
-    }
-
-    tower_hp_timeline : list of {
-        game_time_ms : int
-        our_king     : float   0-100 HP %
-        our_left     : float
-        our_right    : float
-        their_king   : float
-        their_left   : float
-        their_right  : float
-    }
-    """
-
-    HP_SAMPLE_INTERVAL = 10   # seconds between tower HP snapshots
+    HP_SAMPLE_INTERVAL = 10
 
     def __init__(self, screen_w, screen_h):
         ts = datetime.now(timezone.utc)
@@ -315,35 +346,30 @@ class ReplayLogger:
         self.started_at = ts.isoformat()
         self.screen_w   = screen_w
         self.screen_h   = screen_h
-
-        self.our_deck          = [f"slot_{i}" for i in range(4)]  # placeholder
+        self.our_deck   = [f"slot_{i}" for i in range(4)]  # filled once card detection lands
         self.placements        = []
         self.tower_hp_timeline = []
-
         self._start_time      = time.time()
-        self._last_hp_sample  = -self.HP_SAMPLE_INTERVAL  # sample immediately at t=0
+        self._last_hp_sample  = -self.HP_SAMPLE_INTERVAL
 
     def elapsed_ms(self):
         return int((time.time() - self._start_time) * 1000)
 
     def maybe_sample_hp(self, screen):
-        """Call every loop; only actually samples every HP_SAMPLE_INTERVAL seconds."""
         elapsed = time.time() - self._start_time
         if elapsed - self._last_hp_sample < self.HP_SAMPLE_INTERVAL:
             return
         hp = sample_tower_hp(screen)
-        self.tower_hp_timeline.append({
-            "game_time_ms": int(elapsed * 1000),
-            **hp,
-        })
+        self.tower_hp_timeline.append({"game_time_ms": int(elapsed * 1000), **hp})
         self._last_hp_sample = elapsed
 
-    def log_placement(self, card_slot, tx, ty, elixir, phase):
+    def log_placement(self, card_slot, card_name, tx, ty, elixir, phase):
         x_norm = round(tx / self.screen_w, 3)
         y_norm = round(ty / self.screen_h, 3)
         self.placements.append({
             "card_slot":    card_slot,
-            "card_name":    None,           # filled once template matching is ready
+            "card_name":    card_name,   # actual name once template matching ready
+            "card_type":    card_type(card_name),
             "game_time_ms": self.elapsed_ms(),
             "x_norm":       x_norm,
             "y_norm":       y_norm,
@@ -355,14 +381,14 @@ class ReplayLogger:
 
     def to_dict(self, result="unknown"):
         return {
-            "battle_id":          self.battle_id,
-            "started_at":         self.started_at,
-            "result":             result,
-            "duration_ms":        self.elapsed_ms(),
-            "source":             "bot_mumu",
-            "our_deck":           self.our_deck,
-            "placements":         self.placements,
-            "tower_hp_timeline":  self.tower_hp_timeline,
+            "battle_id":         self.battle_id,
+            "started_at":        self.started_at,
+            "result":            result,
+            "duration_ms":       self.elapsed_ms(),
+            "source":            "bot_mumu",
+            "our_deck":          self.our_deck,
+            "placements":        self.placements,
+            "tower_hp_timeline": self.tower_hp_timeline,
         }
 
     def save_local(self, result="unknown"):
@@ -375,8 +401,8 @@ class ReplayLogger:
 
     def send_to_worker(self, result="unknown"):
         try:
-            payload = self.to_dict(result)
-            res = requests.post(f"{WORKER_URL}/bot/battle", json=payload, timeout=10)
+            res = requests.post(f"{WORKER_URL}/bot/battle",
+                                json=self.to_dict(result), timeout=10)
             return res.ok
         except Exception as e:
             print(f"Worker send error: {e}")
@@ -394,7 +420,7 @@ class RoyaleBot:
         self.screen_w = None
         self.screen_h = None
         self._battle_confirm = 0
-        self._coords_saved = False
+        self._coords_saved   = False
 
     def log(self, msg):
         ts = datetime.now().strftime("%H:%M:%S")
@@ -411,15 +437,15 @@ class RoyaleBot:
 
     def dismiss_result(self):
         """
-        Tap through all post-battle screens (result → chest → offer → home).
-        Each tap tries to find the blue OK button dynamically; falls back to
-        a fixed center-bottom position if the button isn't detected.
+        Tap through post-battle screens (result → chest → offer → home).
+        Each tap locates the blue OK button dynamically; falls back to
+        (50%, 73%) — the position suggested by manual testing.
         """
         w, h = self.screen_w, self.screen_h
         fallback_x = int(w * 0.50)
-        fallback_y = int(h * 0.88)
+        fallback_y = int(h * 0.73)
 
-        time.sleep(2)  # wait for result animation
+        time.sleep(2)
         for i in range(6):
             try:
                 scr = screenshot()
@@ -432,7 +458,7 @@ class RoyaleBot:
                     self.log(f"👆 Dismiss {i+1}/6 → fallback ({fallback_x},{fallback_y})")
             except Exception as e:
                 tap(fallback_x, fallback_y)
-                self.log(f"👆 Dismiss {i+1}/6 → fallback (err: {e})")
+                self.log(f"👆 Dismiss {i+1}/6 → err fallback ({e})")
             time.sleep(1.2)
 
     def play_battle(self):
@@ -446,28 +472,29 @@ class RoyaleBot:
 
         self.log(f"🃏 Card slots: {card_positions}")
 
-        # Coordinate overlay on first battle
+        # Save coordinate overlay on first battle
         if DEBUG_SAVE_COORDS and not self._coords_saved:
             try:
-                screen0 = screenshot()
-                samples = [get_play_position(0, w, h) for _ in range(6)]
-                save_coord_overlay(screen0, card_positions, samples)
+                scr0 = screenshot()
+                samples = [(t, get_tile_pos(t, w, h)) for t in
+                           ["bridge_left", "bridge_right", "defense_center",
+                            "spell_center", "push_left", "push_right"]]
+                save_coord_overlay(scr0, card_positions, samples)
                 self._coords_saved = True
             except Exception as e:
                 self.log(f"Coord overlay error: {e}")
 
-        result = "loss"
+        result      = "loss"
         battle_start = time.time()
 
         while time.time() - battle_start < 250:
             if not self.running:
                 break
             try:
-                screen    = screenshot()  # single capture reused for all checks
+                screen    = screenshot()
                 game_time = time.time() - battle_start
 
-                # Battles cannot end in under 20 s — guard prevents false triggers
-                # from blue card-slot backgrounds matching the OK button detector
+                # Battles cannot end in under 20 s — prevents false triggers
                 if game_time > 20 and is_battle_ended(screen):
                     result = "win" if did_win(screen) else "loss"
                     self.log(f"{'🏆 WIN' if result == 'win' else '💀 LOSS'}!")
@@ -477,7 +504,6 @@ class RoyaleBot:
                     time.sleep(1)
                     continue
 
-                # Tower HP snapshot (every 10 s)
                 replay.maybe_sample_hp(screen)
 
                 elixir = get_elixir(screen)
@@ -492,26 +518,26 @@ class RoyaleBot:
                 should, card_idx = should_play(elixir, last_play_time, cards_played)
 
                 if should and card_idx is not None:
-                    phase = "early" if game_time < 90 else "double"
-                    cx, cy = card_positions[card_idx]
-                    tx, ty = get_play_position(game_time, w, h)
+                    phase     = "early" if game_time < 90 else "double"
+                    cx, cy    = card_positions[card_idx]
+                    card_name = replay.our_deck[card_idx]  # "slot_X" until detection ready
+                    pos       = get_play_position(card_name, game_time, w, h)
 
-                    legal = (ARENA_X_MIN * w <= tx <= ARENA_X_MAX * w and
-                             ARENA_Y_MIN * h <= ty <= ARENA_Y_MAX * h)
-                    if not legal:
-                        self.log(f"⚠️ Target ({tx},{ty}) outside arena — skipping")
+                    if pos is None:
+                        self.log(f"⏭️ Skip slot={card_idx} ({card_name}): no valid target yet")
                         continue
 
-                    drag(cx, cy, tx, ty, duration_ms=400)
+                    tx, ty = pos
+                    drag(cx, cy, tx, ty, duration_ms=150)
 
-                    replay.log_placement(card_idx, tx, ty, elixir, phase)
+                    replay.log_placement(card_idx, card_name, tx, ty, elixir, phase)
                     last_play_time = time.time()
                     cards_played  += 1
 
                     x_n = round(tx / w, 3)
-                    y_n = round(ty / h, 3)
                     self.log(
-                        f"🃏 slot={card_idx} ({cx},{cy})→({tx},{ty}) "
+                        f"🃏 {card_name} [{card_type(card_name)}] "
+                        f"({cx},{cy})→({tx},{ty}) "
                         f"lane={classify_lane(x_n)} elixir={elixir} {phase}"
                     )
 
@@ -521,10 +547,10 @@ class RoyaleBot:
                 self.log(f"Battle error: {e}")
                 time.sleep(1)
 
-        # Persist replay
         replay.save_local(result)
         ok = replay.send_to_worker(result)
-        self.log(f"{'✅' if ok else '⚠️'} Replay synced ({len(replay.placements)} placements, "
+        self.log(f"{'✅' if ok else '⚠️'} Replay synced "
+                 f"({len(replay.placements)} placements, "
                  f"{len(replay.tower_hp_timeline)} HP snapshots)")
 
         if result == "win":
@@ -540,7 +566,8 @@ class RoyaleBot:
         self.running = True
         self.log("🤖 RoyaleBot started!")
         if DEBUG:
-            self.log(f"🐛 DEBUG ON | FORCE_PLAY={DEBUG_FORCE_PLAY} | NO_JITTER={DEBUG_NO_JITTER}")
+            self.log(f"🐛 DEBUG ON | FORCE_PLAY={DEBUG_FORCE_PLAY} | "
+                     f"NO_JITTER={DEBUG_NO_JITTER}")
 
         subprocess.run([ADB, "connect", DEVICE], capture_output=True)
         time.sleep(1)
@@ -651,7 +678,8 @@ try:
 
             lf = ctk.CTkFrame(self.root, fg_color="#050510")
             lf.pack(fill="both", expand=True, padx=20, pady=5)
-            ctk.CTkLabel(lf, text="BOT LOG", font=("Arial", 10, "bold"), text_color="#333").pack(anchor="w", padx=8, pady=4)
+            ctk.CTkLabel(lf, text="BOT LOG", font=("Arial", 10, "bold"),
+                         text_color="#333").pack(anchor="w", padx=8, pady=4)
             self.log_box = ctk.CTkTextbox(lf, font=("Courier", 11),
                 fg_color="#030308", text_color="#4caf50", height=200)
             self.log_box.pack(fill="both", expand=True, padx=5, pady=5)
@@ -674,8 +702,7 @@ try:
                 font=("Arial", 11), fg_color="#1a1a2e", hover_color="#222244",
                 command=self.take_screenshot, height=32).pack(pady=5, padx=20, fill="x")
 
-            ctk.CTkLabel(self.root,
-                text=f"Replays saved to {REPLAY_DIR}",
+            ctk.CTkLabel(self.root, text=f"Replays → {REPLAY_DIR}",
                 font=("Arial", 10), text_color="#1a1a1a").pack(pady=5)
 
         def log(self, msg):
