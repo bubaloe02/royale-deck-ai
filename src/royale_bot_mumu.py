@@ -845,38 +845,51 @@ def is_in_battle(screen):
 def find_ok_button(screen):
     """
     Locate the OK/continue button on the result screen.
-    Layer 1: template matching (most reliable).
-    Layer 2: HSV blue blob with wide fallback.
-    Layer 3: OCR scan for button text.
+
+    Layer 1: template matching — fastest when PNG files exist.
+    Layer 2: largest blue rounded rectangle in the bottom 35 % of screen.
+             Robust to emulator scaling, HDR, GPU colour shift, Windows DPI.
+             Verified by checking white label pixels inside the contour.
+    Layer 3: OCR keyword scan as last resort.
     """
-    # Template matching
+    # Layer 1 — template matching
     for name in ("ok_button", "play_again", "chest_ok", "continue"):
         m = _match_template(screen, name)
         if m:
             return m[0], m[1]
 
-    # HSV color detection — tight range then wider fallback
+    # Layer 2 — contour-based button detector
     h, w = screen.shape[:2]
-    y0, y1 = int(h * 0.55), int(h * 0.85)
-    x0, x1 = int(w * 0.20), int(w * 0.80)
-    region = screen[y0:y1, x0:x1]
-    hsv    = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+    y0   = int(h * 0.65)          # buttons always appear in the bottom 35 %
+    roi  = screen[y0:, :]
+    hsv  = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
 
-    blue = cv2.inRange(hsv, (100, 180, 180), (125, 255, 255))
-    if cv2.countNonZero(blue) < 150:
-        blue = cv2.inRange(hsv, (95, 100, 120), (130, 255, 255))
+    # Wide blue range: covers dark/bright/desaturated variants across GPU/scaling
+    blue   = cv2.inRange(hsv, (90, 35, 60), (135, 255, 255))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13))
+    blue   = cv2.morphologyEx(blue, cv2.MORPH_CLOSE, kernel)
 
-    if cv2.countNonZero(blue) >= 80:
-        M = cv2.moments(blue)
-        if M["m00"] != 0:
-            return (int(M["m10"] / M["m00"]) + x0,
-                    int(M["m01"] / M["m00"]) + y0)
+    contours, _ = cv2.findContours(blue, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if contours:
+        biggest = max(contours, key=cv2.contourArea)
+        if cv2.contourArea(biggest) >= w * h * 0.02:   # ≥ 2 % of screen
+            x_bb, y_bb, w_bb, h_bb = cv2.boundingRect(biggest)
+            inner = roi[y_bb : y_bb + h_bb, x_bb : x_bb + w_bb]
+            gray  = cv2.cvtColor(inner, cv2.COLOR_BGR2GRAY)
+            # Require at least 15 white pixels — the button always has white text
+            if cv2.countNonZero(
+                    cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)[1]) >= 15:
+                M = cv2.moments(biggest)
+                if M["m00"] != 0:
+                    return (int(M["m10"] / M["m00"]),
+                            int(M["m01"] / M["m00"]) + y0)
 
-    # OCR scan for button text in the lower half
+    # Layer 3 — OCR keyword scan
     if _ocr_engine:
-        text = _ocr_text(screen[y0:y1, x0:x1])
+        x0, x1 = int(w * 0.20), int(w * 0.80)
+        text = _ocr_text(screen[y0:, x0:x1])
         if any(kw in text for kw in ("ok", "play again", "continue", "collect")):
-            return int(w * 0.50), int((y0 + y1) / 2)
+            return int(w * 0.50), int(h * 0.82)
 
     return None
 
@@ -1344,10 +1357,13 @@ class StateVoter:
         self._current = ScreenState(ScreenState.UNKNOWN, 1.0, "color")
 
     def vote(self, ss: ScreenState) -> ScreenState:
-        self._history.append(ss.state)
-        if (len(self._history) == self._window
-                and len(set(self._history)) == 1):
-            self._current = ss
+        # UNKNOWN is detection noise — don't let it break a streak of real states.
+        # RESULT/UNKNOWN/RESULT/UNKNOWN still commits to RESULT after 3 RESULT frames.
+        if ss.state != ScreenState.UNKNOWN:
+            self._history.append(ss.state)
+            if (len(self._history) == self._window
+                    and len(set(self._history)) == 1):
+                self._current = ss
         return self._current
 
     def reset(self):
@@ -1608,7 +1624,8 @@ class RoyaleBot:
         self.screen_h = None
         self._coords_saved    = False
         self._cached_deck     = None   # refreshed every 5 battles
-        self._break_taken_at  = -1    # tracks which battle count last triggered a break
+        self._break_taken_at    = -1   # tracks which battle count last triggered a break
+        self._last_unknown_save = 0.0  # throttle debug screenshot to once per 10 s
         self.anti_detect      = True   # pause every 10 battles; toggled by GUI
 
     def _get_deck(self):
@@ -1806,8 +1823,13 @@ class RoyaleBot:
                     time.sleep(0.3)
 
                 else:
-                    self.log("🔍 Unknown screen — debug screenshot saved")
-                    save_screenshot(r"C:\debug_screen.png")
+                    now = time.time()
+                    if now - self._last_unknown_save > 10:
+                        save_screenshot(r"C:\debug_screen.png")
+                        self._last_unknown_save = now
+                        self.log("🔍 Unknown screen — screenshot saved")
+                    else:
+                        self.log("🔍 Unknown screen")
                     time.sleep(2)
 
                 # Anti-detection break every 10 battles (guard against re-trigger)
