@@ -338,84 +338,64 @@ def _tile(name, w, h):
     y = max(int(ARENA_Y_MIN * h), min(int(ARENA_Y_MAX * h), y))
     return x, y, name   # (px, py, tile_name)
 
-def place_troop(card_name, phase, lane: LanePressureTracker, w, h):
-    """Place troop with type-aware and phase-aware tile selection."""
+def _troop_tile_pool(card_name, phase, lane):
     ctype = card_type(card_name)
-
     if phase == PHASE_DEFENDING and lane.hot_lane:
-        pool = (["defense_left", "support_left"] if lane.hot_lane == "left"
+        return (["defense_left", "support_left"] if lane.hot_lane == "left"
                 else ["defense_right", "support_right"])
-    elif ctype == "win_condition":
-        # Win conditions always go to bridge regardless of phase
+    if ctype == "win_condition":
         if lane.hot_lane:
-            pool = (["bridge_left"] if lane.hot_lane == "left" else ["bridge_right"])
-        else:
-            pool = ["bridge_left", "bridge_right"]
-    elif ctype == "tank" and phase == PHASE_OPENING:
-        # Don't rush a tank at the start — place it back for a safe push
-        pool = ["support_left", "support_right"]
-    elif phase == PHASE_COUNTERPUSH and lane.hot_lane:
-        pool = (["bridge_left", "push_left"] if lane.hot_lane == "left"
+            return ["bridge_left"] if lane.hot_lane == "left" else ["bridge_right"]
+        return ["bridge_left", "bridge_right"]
+    if ctype == "tank" and phase == PHASE_OPENING:
+        return ["support_left", "support_right"]
+    if phase == PHASE_COUNTERPUSH and lane.hot_lane:
+        return (["bridge_left", "push_left"] if lane.hot_lane == "left"
                 else ["bridge_right", "push_right"])
-    elif phase in (PHASE_DOUBLE, PHASE_OVERTIME):
-        pool = ["push_left", "push_right", "bridge_left", "bridge_right",
-                "bridge_center"]
-    elif phase == PHASE_MID:
-        pool = ["bridge_left", "bridge_right", "bridge_center",
-                "support_left", "support_right"]
-    else:  # opening
-        if ctype == "cycle":
-            pool = ["bridge_left", "bridge_right"]   # cheap cards can go bridge early
-        else:
-            pool = ["support_left", "support_right", "support_center",
-                    "bridge_left", "bridge_right"]
-    return _tile(random.choice(pool), w, h)
+    if phase in (PHASE_DOUBLE, PHASE_OVERTIME):
+        return ["push_left", "push_right", "bridge_left", "bridge_right", "bridge_center"]
+    if phase == PHASE_MID:
+        return ["bridge_left", "bridge_right", "bridge_center", "support_left", "support_right"]
+    if ctype == "cycle":
+        return ["bridge_left", "bridge_right"]
+    return ["support_left", "support_right", "support_center", "bridge_left", "bridge_right"]
 
-def place_building(card_name, phase, lane: LanePressureTracker, w, h):
-    """Buildings go on defensive tiles; mirror hot lane if under attack."""
+def _building_tile_pool(lane):
     if lane.hot_lane == "left":
-        pool = ["anti_hog_left", "defense_left", "safe_building_l"]
-    elif lane.hot_lane == "right":
-        pool = ["anti_hog_right", "defense_right", "safe_building_r"]
-    else:
-        pool = ["defense_left", "defense_right", "defense_center",
-                "safe_building_l", "safe_building_r"]
-    return _tile(random.choice(pool), w, h)
+        return ["anti_hog_left", "defense_left", "safe_building_l"]
+    if lane.hot_lane == "right":
+        return ["anti_hog_right", "defense_right", "safe_building_r"]
+    return ["defense_left", "defense_right", "defense_center", "safe_building_l", "safe_building_r"]
 
-def place_spell(card_name, phase, lane: LanePressureTracker, game_time, w, h,
-                troops=None):
-    """
-    Spells target enemy territory, preferring the hot lane.
-    Gates on spell_target_value when troops are detected:
-      spell_big  requires ≥1 troop in radius
-      spell_small requires ≥3 troops in radius (not worth a small spell on 1 unit)
-    Returns None to hold the card.
-    """
+def _spell_tile_pool(lane):
+    if lane.hot_lane == "left":
+        return ["spell_left", "push_left"]
+    if lane.hot_lane == "right":
+        return ["spell_right", "push_right"]
+    return ["spell_left", "spell_right", "spell_center"]
+
+def place_troop(card_name, phase, lane, w, h):
+    return _tile(random.choice(_troop_tile_pool(card_name, phase, lane)), w, h)
+
+def place_building(card_name, phase, lane, w, h):
+    return _tile(random.choice(_building_tile_pool(lane)), w, h)
+
+def place_spell(card_name, phase, lane, game_time, w, h, troops=None):
     if game_time < 20:
         return None
-
-    if lane.hot_lane == "left":
-        pool = ["spell_left", "push_left"]
-    elif lane.hot_lane == "right":
-        pool = ["spell_right", "push_right"]
-    else:
-        pool = ["spell_left", "spell_right", "spell_center"]
-
-    x, y, name = _tile(random.choice(pool), w, h)
-
+    x, y, name = _tile(random.choice(_spell_tile_pool(lane)), w, h)
     if troops:
-        tx_n, ty_n = x / w, y / h
-        value = spell_target_value(card_name, tx_n, ty_n, troops)
+        value   = spell_target_value(card_name, x / w, y / h, troops)
         min_hit = 1 if card_type(card_name) == "spell_big" else 3
         if value < min_hit:
-            return None   # not enough targets — hold it
-
+            return None
     return x, y, name
 
-def get_play_position(card_name, phase, lane_pressure, game_time, w, h, troops=None):
+def get_all_play_positions(card_name, phase, lane_pressure, game_time, w, h, troops=None):
     """
-    Returns (x, y, tile_name) or None (meaning: hold this card).
-    Tries PLACEMENT_DB learned distribution first; falls back to heuristics.
+    Returns ALL valid (x, y, tile_name) candidates for a card.
+    DecisionEngine scores every candidate independently and picks the best.
+    Returns [] to hold the card this tick.
     """
     lane  = lane_pressure.hot_lane or "center"
     ctype = card_type(card_name)
@@ -425,15 +405,51 @@ def get_play_position(card_name, phase, lane_pressure, game_time, w, h, troops=N
         x_n, y_n = learned
         if DEBUG:
             print(f"  [DB] {card_name} → learned ({x_n:.3f},{y_n:.3f})")
-        return int(x_n * w), int(y_n * h), "learned"
+        return [(int(x_n * w), int(y_n * h), "learned")]
 
     if ctype in _TROOP_LIKE:
-        return place_troop(card_name, phase, lane_pressure, w, h)
+        pool = _troop_tile_pool(card_name, phase, lane_pressure)
     elif ctype == "building":
-        return place_building(card_name, phase, lane_pressure, w, h)
+        pool = _building_tile_pool(lane_pressure)
     elif ctype in _SPELL_LIKE:
-        return place_spell(card_name, phase, lane_pressure, game_time, w, h, troops)
-    return place_troop(card_name, phase, lane_pressure, w, h)
+        if game_time < 20:
+            return []
+        pool = _spell_tile_pool(lane_pressure)
+    else:
+        pool = _troop_tile_pool(card_name, phase, lane_pressure)
+
+    candidates = []
+    for tile_name in pool:
+        x, y, _ = _tile(tile_name, w, h)
+        if ctype in _SPELL_LIKE and troops:
+            value   = spell_target_value(card_name, x / w, y / h, troops)
+            min_hit = 1 if ctype == "spell_big" else 3
+            if value < min_hit:
+                continue
+        candidates.append((x, y, tile_name))
+    return candidates
+
+def get_play_position(card_name, phase, lane_pressure, game_time, w, h, troops=None):
+    """Single random position from the valid pool. Kept for compatibility."""
+    candidates = get_all_play_positions(card_name, phase, lane_pressure,
+                                        game_time, w, h, troops)
+    return random.choice(candidates) if candidates else None
+
+def _tile_bonus(tile_name, phase, lane_pressure) -> float:
+    """Positional score bonus from board state: hot-lane alignment + phase fit."""
+    lp = lane_pressure
+    bonus = 0.0
+    if "left" in tile_name:
+        bonus += lp.left * 0.005
+    elif "right" in tile_name:
+        bonus += lp.right * 0.005
+    if "defense" in tile_name or "anti_hog" in tile_name:
+        if lp.under_attack:
+            bonus += 0.4
+    if "bridge" in tile_name or "push" in tile_name:
+        if phase in (PHASE_DOUBLE, PHASE_OVERTIME):
+            bonus += 0.25
+    return bonus
 
 # ─── PLACEMENT DATABASE ───────────────────────────────────────────────────────
 
@@ -537,6 +553,80 @@ class TroopDetector:
             cy = int(M["m01"] / M["m00"]) + ay0
             troops.append({"x_norm": round(cx / w, 3), "y_norm": round(cy / h, 3)})
         return troops
+
+# ─── TROOP TRACKER ───────────────────────────────────────────────────────────
+
+class TrackedTroop:
+    """A detected blob with persistent identity and frame-to-frame velocity."""
+    __slots__ = ("id", "x_norm", "y_norm", "vx", "vy", "last_seen")
+
+    def __init__(self, tid, x_norm, y_norm):
+        self.id        = tid
+        self.x_norm    = x_norm
+        self.y_norm    = y_norm
+        self.vx        = 0.0
+        self.vy        = 0.0
+        self.last_seen = time.time()
+
+    def update(self, x_norm, y_norm):
+        now  = time.time()
+        dt   = max(0.05, now - self.last_seen)
+        self.vx        = (x_norm - self.x_norm) / dt
+        self.vy        = (y_norm - self.y_norm) / dt
+        self.x_norm    = x_norm
+        self.y_norm    = y_norm
+        self.last_seen = now
+
+    def predict(self, t_ahead=0.5):
+        """Extrapolate position t_ahead seconds into the future."""
+        return (
+            min(1.0, max(0.0, self.x_norm + self.vx * t_ahead)),
+            min(1.0, max(0.0, self.y_norm + self.vy * t_ahead)),
+        )
+
+class TroopTracker:
+    """
+    Assigns persistent IDs to TroopDetector blobs via nearest-neighbour matching.
+    Computes velocity each frame and exposes predicted positions for spell lead.
+    """
+    MAX_MATCH_DIST = 0.10   # normalised distance to match across frames
+    MAX_AGE        = 1.5    # seconds before entry is pruned
+
+    def __init__(self):
+        self._troops  = {}   # id → TrackedTroop
+        self._next_id = 0
+
+    def update(self, detections: list) -> list:
+        now = time.time()
+        stale = [tid for tid, t in self._troops.items()
+                 if now - t.last_seen > self.MAX_AGE]
+        for tid in stale:
+            del self._troops[tid]
+
+        remaining = list(detections)
+        for troop in list(self._troops.values()):
+            if not remaining:
+                break
+            dists = [((d["x_norm"] - troop.x_norm) ** 2 +
+                      (d["y_norm"] - troop.y_norm) ** 2) ** 0.5
+                     for d in remaining]
+            best_i = min(range(len(dists)), key=lambda i: dists[i])
+            if dists[best_i] <= self.MAX_MATCH_DIST:
+                d = remaining.pop(best_i)
+                troop.update(d["x_norm"], d["y_norm"])
+
+        for d in remaining:
+            tid = self._next_id
+            self._next_id += 1
+            self._troops[tid] = TrackedTroop(tid, d["x_norm"], d["y_norm"])
+
+        return list(self._troops.values())
+
+    def predicted_blobs(self, t_ahead=0.5) -> list:
+        """Return [{x_norm, y_norm}] predicted t_ahead seconds ahead."""
+        return [{"x_norm": x, "y_norm": y}
+                for t in self._troops.values()
+                for x, y in [t.predict(t_ahead)]]
 
 # ─── WAIT DB (#4) ────────────────────────────────────────────────────────────
 
@@ -1199,14 +1289,15 @@ class VisualSnapshot:
     Immutable record of everything VisionEngine sees in a single frame.
     Produced once per tick; consumed by GameState and DecisionEngine.
     """
-    __slots__ = ("screen_state", "towers", "troops", "elixir", "ok_button")
+    __slots__ = ("screen_state", "towers", "troops", "predicted_troops", "elixir", "ok_button")
 
-    def __init__(self, screen_state, towers, troops, elixir, ok_button):
-        self.screen_state = screen_state   # ScreenState instance
-        self.towers       = towers         # dict from sample_tower_hp, or {}
-        self.troops       = troops         # list of {x_norm, y_norm} blobs
-        self.elixir       = elixir         # int 0-10
-        self.ok_button    = ok_button      # (x, y) or None
+    def __init__(self, screen_state, towers, troops, predicted_troops, elixir, ok_button):
+        self.screen_state     = screen_state    # ScreenState instance
+        self.towers           = towers          # dict from sample_tower_hp, or {}
+        self.troops           = troops          # current-frame [{x_norm, y_norm}] blobs
+        self.predicted_troops = predicted_troops  # 0.5 s ahead — use for spell lead
+        self.elixir           = elixir          # int 0-10
+        self.ok_button        = ok_button       # (x, y) or None
 
 # ─── VISION ENGINE ────────────────────────────────────────────────────────────
 
@@ -1214,21 +1305,55 @@ class VisionEngine:
     """
     Single entry point for all visual detection.
     Screenshot → VisualSnapshot in one call.
-    Owns the TroopDetector so frame-diff state is preserved across ticks.
+    Owns TroopDetector (frame-diff) and TroopTracker (ID + velocity) so
+    state is preserved across ticks.
     """
     def __init__(self):
         self._troop_det = TroopDetector()
+        self._troop_trk = TroopTracker()
 
     def analyze(self, screen) -> VisualSnapshot:
-        ss = detect_screen(screen)
-        ib = (ss == ScreenState.BATTLE)
+        ss  = detect_screen(screen)
+        ib  = (ss == ScreenState.BATTLE)
+        raw = self._troop_det.detect(screen) if ib else []
+        if ib:
+            self._troop_trk.update(raw)
+            predicted = self._troop_trk.predicted_blobs(t_ahead=0.5)
+        else:
+            predicted = []
         return VisualSnapshot(
-            screen_state = ss,
-            towers    = sample_tower_hp(screen) if ib else {},
-            troops    = self._troop_det.detect(screen) if ib else [],
-            elixir    = get_elixir(screen) if ib else 0,
-            ok_button = find_ok_button(screen) if ss == ScreenState.RESULT else None,
+            screen_state     = ss,
+            towers           = sample_tower_hp(screen) if ib else {},
+            troops           = raw,
+            predicted_troops = predicted,
+            elixir           = get_elixir(screen) if ib else 0,
+            ok_button        = find_ok_button(screen) if ss == ScreenState.RESULT else None,
         )
+
+# ─── STATE VOTER (confidence voting) ─────────────────────────────────────────
+
+class StateVoter:
+    """
+    Prevents single-frame flicker from triggering wrong state transitions.
+    Commits to a new ScreenState only after seeing it N consecutive frames.
+    The outer loop acts on voter.vote(visual.screen_state), not on the raw state.
+    """
+    def __init__(self, window: int = 3):
+        self._window  = window
+        self._history = deque(maxlen=window)
+        self._current = ScreenState(ScreenState.UNKNOWN, 1.0, "color")
+
+    def vote(self, ss: ScreenState) -> ScreenState:
+        self._history.append(ss.state)
+        if (len(self._history) == self._window
+                and len(set(self._history)) == 1):
+            self._current = ss
+        return self._current
+
+    def reset(self):
+        """Clear history so stale frames don't carry over after a state change."""
+        self._history.clear()
+        self._current = ScreenState(ScreenState.UNKNOWN, 1.0, "color")
 
 # ─── UNIFIED GAME STATE ───────────────────────────────────────────────────────
 
@@ -1405,30 +1530,33 @@ class DecisionEngine:
                                gs.phase)
             self._wait_start = None
 
-        phase  = gs.phase
-        troops = visual.troops
-        board  = self.board_evaluator.score(gs)
+        phase         = gs.phase
+        troops        = visual.troops
+        # Predicted positions lead spells to where troops will be in 0.5 s
+        spell_targets = visual.predicted_troops if visual.predicted_troops else troops
+        board         = self.board_evaluator.score(gs)
 
-        candidates = []
+        # Evaluate every legal (card, tile) pair — 4 cards × N tiles each
+        candidates = []   # (score, slot, card_name, (tx, ty, tile_name))
         for s in range(4):
-            cname = gs.rotation.card_at(s)
-            pos   = get_play_position(cname, phase, gs.lane_pressure,
-                                      gs.game_time, w, h, troops)
-            if pos is None:
-                continue
-            tx, ty, tile_name = pos
-            if card_type(cname) in _SPELL_LIKE:
-                if not self.spell_evaluator.can_cast(cname, tx, ty, w, h, troops):
-                    continue
-            sc  = COMBO_DB.score_follow_up(gs.prev_card, cname, phase)
-            ctp = card_type(cname)
+            cname   = gs.rotation.card_at(s)
+            ctp     = card_type(cname)
+            base_sc = COMBO_DB.score_follow_up(gs.prev_card, cname, phase)
             if phase == PHASE_DEFENDING and ctp in ("mini_tank", "building", "spell_small"):
-                sc += 0.3
+                base_sc += 0.3
             elif phase == PHASE_COUNTERPUSH and ctp in ("win_condition", "tank", "support"):
-                sc += 0.3
+                base_sc += 0.3
             elif phase in (PHASE_DOUBLE, PHASE_OVERTIME) and ctp in ("win_condition", "spell_big"):
-                sc += 0.2
-            candidates.append((sc, s, cname, (tx, ty, tile_name)))
+                base_sc += 0.2
+
+            for tx, ty, tile_name in get_all_play_positions(
+                    cname, phase, gs.lane_pressure, gs.game_time, w, h, spell_targets):
+                tile_sc = base_sc + _tile_bonus(tile_name, phase, gs.lane_pressure)
+                # Spell: extra score for each predicted troop in blast radius
+                if ctp in _SPELL_LIKE and spell_targets:
+                    hits    = spell_target_value(cname, tx / w, ty / h, spell_targets)
+                    tile_sc += hits * 0.15
+                candidates.append((tile_sc, s, cname, (tx, ty, tile_name)))
 
         if not candidates:
             gs.replay.log_wait("all_held", 0, phase)
@@ -1478,7 +1606,6 @@ class RoyaleBot:
         self.on_status = on_status
         self.screen_w = None
         self.screen_h = None
-        self._battle_confirm  = 0
         self._coords_saved    = False
         self._cached_deck     = None   # refreshed every 5 battles
         self._break_taken_at  = -1    # tracks which battle count last triggered a break
@@ -1638,21 +1765,19 @@ class RoyaleBot:
         self.log(f"📐 Screen: {self.screen_w}x{self.screen_h}")
 
         vision = VisionEngine()   # shared across outer-loop ticks
+        voter  = StateVoter(window=3)   # require 3 consecutive same-state frames
 
         while self.running:
             try:
                 screen = screenshot()
                 visual = vision.analyze(screen)
-                state  = visual.screen_state
+                state  = voter.vote(visual.screen_state)   # flicker-resistant
 
                 if state == ScreenState.BATTLE:
-                    self._battle_confirm += 1
-                    if self._battle_confirm >= BATTLE_DEBOUNCE:
-                        self._battle_confirm = 0
-                        self.play_battle()
+                    self.play_battle()
+                    voter.reset()   # prevent stale BATTLE frames from re-triggering
 
                 elif state == ScreenState.RESULT:
-                    self._battle_confirm = 0
                     if visual.ok_button:
                         self.log(f"👆 Dismiss result at {visual.ok_button}")
                         tap(*visual.ok_button)
@@ -1661,9 +1786,9 @@ class RoyaleBot:
                         time.sleep(0.2)
 
                 elif state == ScreenState.HOME:
-                    self._battle_confirm = 0
                     self.log("🏠 Home — tapping Battle")
                     self.find_and_tap_battle(screen)
+                    voter.reset()
                     self.log("⏳ Waiting for battle...")
                     _mm_start = time.time()
                     while self.running and time.time() - _mm_start < 60:
@@ -1674,16 +1799,13 @@ class RoyaleBot:
                         time.sleep(0.5 if is_matchmaking(scr) else 0.2)
 
                 elif state == ScreenState.MATCHMAKING:
-                    self._battle_confirm = 0
                     self.log("⏳ Matchmaking...")
                     time.sleep(0.5)
 
                 elif state == ScreenState.LOADING:
-                    self._battle_confirm = 0
                     time.sleep(0.3)
 
                 else:
-                    self._battle_confirm = 0
                     self.log("🔍 Unknown screen — debug screenshot saved")
                     save_screenshot(r"C:\debug_screen.png")
                     time.sleep(2)
