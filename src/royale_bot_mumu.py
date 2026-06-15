@@ -794,39 +794,71 @@ def is_in_battle(screen):
 def find_ok_button(screen):
     """
     Locate the OK/continue button on the result screen.
-    Tries a tight HSV range first; falls back to a wider range to handle
-    emulator colour shifts and DPI differences.
-    TODO: replace with template matching for full robustness.
+    Layer 1: template matching (most reliable).
+    Layer 2: HSV blue blob with wide fallback.
+    Layer 3: OCR scan for button text.
     """
+    # Template matching
+    for name in ("ok_button", "play_again", "chest_ok", "continue"):
+        m = _match_template(screen, name)
+        if m:
+            return m[0], m[1]
+
+    # HSV color detection — tight range then wider fallback
     h, w = screen.shape[:2]
     y0, y1 = int(h * 0.55), int(h * 0.85)
     x0, x1 = int(w * 0.20), int(w * 0.80)
     region = screen[y0:y1, x0:x1]
-    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+    hsv    = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
 
-    # Tight range — high confidence
     blue = cv2.inRange(hsv, (100, 180, 180), (125, 255, 255))
     if cv2.countNonZero(blue) < 150:
-        # Wider fallback — handles minor colour/DPI shifts
         blue = cv2.inRange(hsv, (95, 100, 120), (130, 255, 255))
 
-    if cv2.countNonZero(blue) < 80:
-        return None
-    M = cv2.moments(blue)
-    if M["m00"] == 0:
-        return None
-    return (int(M["m10"] / M["m00"]) + x0,
-            int(M["m01"] / M["m00"]) + y0)
+    if cv2.countNonZero(blue) >= 80:
+        M = cv2.moments(blue)
+        if M["m00"] != 0:
+            return (int(M["m10"] / M["m00"]) + x0,
+                    int(M["m01"] / M["m00"]) + y0)
+
+    # OCR scan for button text in the lower half
+    if _ocr_engine:
+        text = _ocr_text(screen[y0:y1, x0:x1])
+        if any(kw in text for kw in ("ok", "play again", "continue", "collect")):
+            return int(w * 0.50), int((y0 + y1) / 2)
+
+    return None
 
 def is_battle_ended(screen):
     return find_ok_button(screen) is not None
 
 def did_win(screen):
     """
-    CR places WINNER at bottom (blue banner), LOSER at top (red/pink banner).
-    Local player always has blue; opponent has red/pink.
-    TODO: replace with OCR of player name once pytesseract is available.
+    Determine win/loss from the result screen.
+    Layer 1: template matching for victory/defeat banners.
+    Layer 2: OCR for "Victory" / "Defeat" text.
+    Layer 3: banner color (blue = local player = winner at bottom).
     """
+    # Template matching
+    if _match_template(screen, "victory"):
+        if DEBUG: print("[did_win] template → WIN")
+        return True
+    if _match_template(screen, "defeat"):
+        if DEBUG: print("[did_win] template → LOSS")
+        return False
+
+    # OCR
+    if _ocr_engine:
+        h, w = screen.shape[:2]
+        text = _ocr_text(screen[int(h * 0.20):int(h * 0.55), :])
+        if "victory" in text:
+            if DEBUG: print(f"[did_win] ocr ({_ocr_engine}) → WIN")
+            return True
+        if "defeat" in text:
+            if DEBUG: print(f"[did_win] ocr ({_ocr_engine}) → LOSS")
+            return False
+
+    # Banner color fallback: winner is at bottom (blue banner), loser at top
     h, w = screen.shape[:2]
     bottom = screen[int(h*0.60):int(h*0.68), int(w*0.10):int(w*0.90)]
     top    = screen[int(h*0.30):int(h*0.38), int(w*0.10):int(w*0.90)]
@@ -837,7 +869,7 @@ def did_win(screen):
 
     b, t = blue_px(bottom), blue_px(top)
     if DEBUG:
-        print(f"[did_win] bottom_blue={b} top_blue={t} → {'WIN' if b > t else 'LOSS'}")
+        print(f"[did_win] color → bottom_blue={b} top_blue={t} → {'WIN' if b > t else 'LOSS'}")
     return b > t
 
 def get_elixir(screen):
@@ -857,26 +889,170 @@ def is_matchmaking(screen):
     r2 = cv2.inRange(hsv, (170, 150, 150), (180, 255, 255))
     return cv2.countNonZero(r1) + cv2.countNonZero(r2) > 200
 
-# ─── SCREEN STATE MACHINE ─────────────────────────────────────────────────────
-_STATE_BATTLE      = "battle"
-_STATE_RESULT      = "result"
-_STATE_HOME        = "home"
-_STATE_MATCHMAKING = "matchmaking"
-_STATE_LOADING     = "loading"
-_STATE_UNKNOWN     = "unknown"
+# ─── SCREEN STATE + VISION PIPELINE ─────────────────────────────────────────
 
-def detect_screen_state(screen):
+class ScreenState:
     """
-    Classify the current screen into one of five known states.
-    Order matters: battle check before result, result before home.
-    The bot reacts only to what it sees — no timing assumptions.
+    Wraps a screen state string with a detection confidence and the method
+    that produced it ("color", "template", "ocr").
+
+    String class constants allow comparisons like:
+        state == ScreenState.BATTLE
+    against both other ScreenState instances and plain strings.
     """
-    if is_in_battle(screen):     return _STATE_BATTLE
-    if is_battle_ended(screen):  return _STATE_RESULT
-    if is_on_home_screen(screen): return _STATE_HOME
-    if is_matchmaking(screen):   return _STATE_MATCHMAKING
-    if is_loading(screen):       return _STATE_LOADING
-    return _STATE_UNKNOWN
+    BATTLE      = "battle"
+    RESULT      = "result"
+    HOME        = "home"
+    MATCHMAKING = "matchmaking"
+    LOADING     = "loading"
+    UNKNOWN     = "unknown"
+
+    MIN_CONFIDENCE = 0.90   # threshold for "confident enough to act"
+
+    def __init__(self, state: str, confidence: float, method: str = "color"):
+        self.state      = state
+        self.confidence = confidence
+        self.method     = method
+
+    def __eq__(self, other):
+        if isinstance(other, str):
+            return self.state == other
+        if isinstance(other, ScreenState):
+            return self.state == other.state
+        return NotImplemented
+
+    def __str__(self):
+        return self.state
+
+    def __repr__(self):
+        return (f"ScreenState({self.state!r}, "
+                f"conf={self.confidence:.2f}, via={self.method})")
+
+    @property
+    def is_confident(self):
+        return self.confidence >= self.MIN_CONFIDENCE
+
+# ─── TEMPLATE MATCHING LAYER ──────────────────────────────────────────────────
+# Drop PNG files into src/templates/ and they will be used automatically.
+# Suggested filenames: ok_button.png, play_again.png, battle_button.png,
+#   victory.png, defeat.png, chest_ok.png, cancel.png
+_TEMPLATES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates")
+_template_cache: dict = {}
+
+def _load_template(name: str):
+    if name not in _template_cache:
+        path = os.path.join(_TEMPLATES_DIR, f"{name}.png")
+        _template_cache[name] = cv2.imread(path) if os.path.exists(path) else None
+    return _template_cache[name]
+
+def _match_template(screen, name: str, threshold: float = 0.80):
+    """
+    Match a named template against screen.
+    Returns (cx, cy, confidence) if found above threshold, else None.
+    """
+    tmpl = _load_template(name)
+    if tmpl is None:
+        return None
+    th, tw = tmpl.shape[:2]
+    sh, sw = screen.shape[:2]
+    if th > sh or tw > sw:
+        return None
+    result = cv2.matchTemplate(screen, tmpl, cv2.TM_CCOEFF_NORMED)
+    _, max_val, _, max_loc = cv2.minMaxLoc(result)
+    if max_val >= threshold:
+        return max_loc[0] + tw // 2, max_loc[1] + th // 2, float(max_val)
+    return None
+
+# ─── OCR LAYER (optional — install pytesseract to enable) ────────────────────
+_ocr_engine = None
+try:
+    import pytesseract as _pyt
+    _ocr_engine = "pytesseract"
+except ImportError:
+    pass
+
+if _ocr_engine is None:
+    try:
+        import easyocr as _eocr
+        _eocr_reader = _eocr.Reader(["en"], gpu=False, verbose=False)
+        _ocr_engine  = "easyocr"
+    except ImportError:
+        pass
+
+_OCR_RESULT_KW  = {"victory", "defeat", "ok", "play again", "continue"}
+_OCR_HOME_KW    = {"battle", "clan", "shop", "events"}
+_OCR_MM_KW      = {"cancel", "searching", "found"}
+
+def _ocr_text(region) -> str:
+    """Return lowercase OCR text for a BGR image region, or '' if unavailable."""
+    if _ocr_engine == "pytesseract":
+        try:
+            return _pyt.image_to_string(region).lower()
+        except Exception:
+            return ""
+    if _ocr_engine == "easyocr":
+        try:
+            return " ".join(_eocr_reader.readtext(region, detail=0)).lower()
+        except Exception:
+            return ""
+    return ""
+
+# ─── CENTRAL DETECTOR ────────────────────────────────────────────────────────
+
+def detect_screen(screen) -> ScreenState:
+    """
+    3-layer pipeline: color → template → OCR.
+    Returns a ScreenState with confidence and detection method.
+    The bot acts on any state; confidence is logged for debugging.
+
+    Layer order:
+      1. Color (fast, existing HSV checks)
+      2. Template matching (if PNG files exist in src/templates/)
+      3. OCR (if pytesseract or easyocr is installed)
+    """
+    # ── Layer 1: color-based fast checks ──────────────────────────────────
+    if is_in_battle(screen):
+        return ScreenState(ScreenState.BATTLE, 0.85, "color")
+
+    if is_matchmaking(screen):
+        return ScreenState(ScreenState.MATCHMAKING, 0.80, "color")
+
+    if is_loading(screen):
+        return ScreenState(ScreenState.LOADING, 0.85, "color")
+
+    # ── Layer 2: template matching ─────────────────────────────────────────
+    for tmpl_name in ("ok_button", "play_again", "chest_ok", "continue"):
+        m = _match_template(screen, tmpl_name)
+        if m:
+            return ScreenState(ScreenState.RESULT, m[2], "template")
+
+    m = _match_template(screen, "victory")
+    if m:
+        return ScreenState(ScreenState.RESULT, m[2], "template")
+
+    m = _match_template(screen, "battle_button")
+    if m:
+        return ScreenState(ScreenState.HOME, m[2], "template")
+
+    # ── Color fallbacks (less reliable, checked after templates) ───────────
+    if is_battle_ended(screen):
+        return ScreenState(ScreenState.RESULT, 0.75, "color")
+
+    if is_on_home_screen(screen):
+        return ScreenState(ScreenState.HOME, 0.80, "color")
+
+    # ── Layer 3: OCR ──────────────────────────────────────────────────────
+    if _ocr_engine:
+        h, w = screen.shape[:2]
+        text = _ocr_text(screen[int(h * 0.35):int(h * 0.90), :])
+        if any(kw in text for kw in _OCR_RESULT_KW):
+            return ScreenState(ScreenState.RESULT, 0.92, "ocr")
+        if any(kw in text for kw in _OCR_HOME_KW):
+            return ScreenState(ScreenState.HOME, 0.88, "ocr")
+        if any(kw in text for kw in _OCR_MM_KW):
+            return ScreenState(ScreenState.MATCHMAKING, 0.88, "ocr")
+
+    return ScreenState(ScreenState.UNKNOWN, 1.0, "color")
 
 # ─── TOWER HP DETECTION ──────────────────────────────────────────────────────
 
@@ -1082,9 +1258,14 @@ class RoyaleBot:
             self.on_status(msg)
 
     def find_and_tap_battle(self, screen):
-        h, w = screen.shape[:2]
-        bx, by = int(w * 0.40), int(h * 0.77)
-        self.log(f"🎮 Tapping battle button at ({bx}, {by}) on {w}x{h}...")
+        m = _match_template(screen, "battle_button")
+        if m:
+            bx, by = m[0], m[1]
+            self.log(f"🎮 Battle button (template) at ({bx},{by}) conf={m[2]:.2f}")
+        else:
+            h, w = screen.shape[:2]
+            bx, by = int(w * 0.40), int(h * 0.77)
+            self.log(f"🎮 Battle button (hardcoded) at ({bx},{by})")
         tap(bx, by)
         time.sleep(2)
 
@@ -1338,15 +1519,15 @@ class RoyaleBot:
         while self.running:
             try:
                 screen = screenshot()
-                state  = detect_screen_state(screen)
+                state  = detect_screen(screen)
 
-                if state == _STATE_BATTLE:
+                if state == ScreenState.BATTLE:
                     self._battle_confirm += 1
                     if self._battle_confirm >= BATTLE_DEBOUNCE:
                         self._battle_confirm = 0
                         self.play_battle()
 
-                elif state == _STATE_RESULT:
+                elif state == ScreenState.RESULT:
                     self._battle_confirm = 0
                     btn = find_ok_button(screen)
                     if btn:
@@ -1356,7 +1537,7 @@ class RoyaleBot:
                     else:
                         time.sleep(0.2)
 
-                elif state == _STATE_HOME:
+                elif state == ScreenState.HOME:
                     self._battle_confirm = 0
                     self.log("🏠 Home — tapping Battle")
                     self.find_and_tap_battle(screen)
@@ -1373,16 +1554,16 @@ class RoyaleBot:
                         else:
                             time.sleep(0.2)
 
-                elif state == _STATE_MATCHMAKING:
+                elif state == ScreenState.MATCHMAKING:
                     self._battle_confirm = 0
                     self.log("⏳ Matchmaking...")
                     time.sleep(0.5)
 
-                elif state == _STATE_LOADING:
+                elif state == ScreenState.LOADING:
                     self._battle_confirm = 0
                     time.sleep(0.3)
 
-                else:  # _STATE_UNKNOWN
+                else:  # ScreenState.UNKNOWN
                     self._battle_confirm = 0
                     self.log("🔍 Unknown screen — debug screenshot saved")
                     save_screenshot(r"C:\debug_screen.png")
