@@ -171,9 +171,14 @@ PHASE_COUNTERPUSH = "counterpush" # triggered after successful defense
 _TIMING_INTERVALS = [0.4, 0.8, 1.2, 1.5, 2.0, 2.5, 3.0, 3.5, 4.5, 6.0]
 _TIMING_WEIGHTS   = [0.04, 0.10, 0.18, 0.22, 0.20, 0.12, 0.07, 0.04, 0.02, 0.01]
 
-def human_play_interval():
-    """Return a play-cooldown drawn from a human-like timing distribution."""
-    return random.choices(_TIMING_INTERVALS, weights=_TIMING_WEIGHTS, k=1)[0]
+def human_play_interval(phase=None):
+    """Play-cooldown from human-like distribution, capped by phase."""
+    base = random.choices(_TIMING_INTERVALS, weights=_TIMING_WEIGHTS, k=1)[0]
+    if phase in (PHASE_DOUBLE, PHASE_OVERTIME):
+        return min(base, 1.5)    # double elixir: max 1.5 s
+    elif phase == PHASE_OPENING:
+        return min(base, 2.5)    # opening: max 2.5 s
+    return min(base, 3.5)        # mid / other: max 3.5 s
 
 # ─── ENEMY ELIXIR TRACKER (#2) ───────────────────────────────────────────────
 class EnemyElixirTracker:
@@ -1027,6 +1032,13 @@ class RoyaleBot:
         self.screen_h = None
         self._battle_confirm = 0
         self._coords_saved   = False
+        self._cached_deck    = None   # refreshed every 5 battles
+
+    def _get_deck(self):
+        if self._cached_deck is None or self.battles_played % 5 == 0:
+            self._cached_deck = fetch_deck()
+            self.log(f"🃏 Deck: {self._cached_deck}")
+        return self._cached_deck
 
     def log(self, msg):
         ts = datetime.now().strftime("%H:%M:%S")
@@ -1063,7 +1075,7 @@ class RoyaleBot:
             time.sleep(1.2)
 
     def play_battle(self):
-        deck        = fetch_deck()
+        deck        = self._get_deck()
         replay      = ReplayLogger(self.screen_w, self.screen_h, deck)
         rotation    = CardRotation(deck)
         state       = BattleStateMachine()
@@ -1087,14 +1099,14 @@ class RoyaleBot:
             except Exception as e:
                 self.log(f"Coord overlay error: {e}")
 
-        result       = "loss"
-        battle_start = time.time()
-        last_play_t  = 0
-        cards_played = 0
-        play_cooldown = human_play_interval()
-        prev_hp      = {}
-        prev_card    = ""       # last card played (for sequence logging)
-        _wait_start  = None     # tracks when a wait period began
+        result         = "loss"
+        battle_start   = time.time()
+        last_play_t    = 0
+        cards_played   = 0
+        play_cooldown  = human_play_interval()
+        prev_card      = ""     # last card played (for sequence logging)
+        _wait_start    = None   # tracks when a wait period began
+        pending_reward = None   # deferred reward: resolved on next HP sample
 
         while time.time() - battle_start < 250:
             if not self.running:
@@ -1137,29 +1149,49 @@ class RoyaleBot:
                 skip_rand   = (not DEBUG_FORCE_PLAY) and random.random() < 0.20
 
                 if cooldown_ok and elixir_ok and not skip_rand:
-                    # Flush any wait period that just ended
                     if _wait_start is not None:
                         replay.log_wait("cooldown",
                                         int((time.time() - _wait_start) * 1000),
                                         state.phase)
                         _wait_start = None
 
-                    # Pick best slot from hand (combo + phase scoring)
-                    slot      = score_hand(rotation.hand, prev_card, state.phase,
-                                           lane_p, game_time, troops)
-                    card_name = rotation.card_at(slot)
-                    ctype     = card_type(card_name)
-                    phase_str = "early" if game_time < 90 else "double"
+                    # Resolve deferred reward from the previous card play
+                    if pending_reward is not None and hp:
+                        reward.record(pending_reward["entry"],
+                                      pending_reward["hp_before"],
+                                      hp, pending_reward["elixir"])
+                        pending_reward = None
 
-                    pos = get_play_position(card_name, state.phase, lane_p,
-                                            game_time, w, h, troops)
+                    # Evaluate ALL 4 slots so a held spell never freezes the rotation.
+                    phase_str  = "early" if game_time < 90 else "double"
+                    candidates = []   # (score, slot, card_name, pos)
+                    for s in range(4):
+                        cname = rotation.card_at(s)
+                        pos   = get_play_position(cname, state.phase, lane_p,
+                                                  game_time, w, h, troops)
+                        if pos is None:
+                            continue
+                        ctp = card_type(cname)
+                        sc  = COMBO_DB.score_follow_up(prev_card, cname, state.phase)
+                        if state.phase == PHASE_DEFENDING and ctp in (
+                                "mini_tank", "building", "spell_small"):
+                            sc += 0.3
+                        elif state.phase == PHASE_COUNTERPUSH and ctp in (
+                                "win_condition", "tank", "support"):
+                            sc += 0.3
+                        elif state.phase in (PHASE_DOUBLE, PHASE_OVERTIME) and ctp in (
+                                "win_condition", "spell_big"):
+                            sc += 0.2
+                        candidates.append((sc, s, cname, pos))
 
-                    if pos is None:
-                        self.log(f"⏭️ Hold {card_name} ({ctype}): no valid target")
-                        replay.log_wait("held_spell", 0, state.phase)
+                    if not candidates:
+                        self.log("⏭️ All cards held — no valid targets this tick")
+                        replay.log_wait("all_held", 0, state.phase)
                     else:
+                        _, slot, card_name, pos = max(candidates, key=lambda x: x[0])
+                        ctype     = card_type(card_name)
                         tx, ty, tile_name = pos
-                        cx, cy = card_positions[slot]
+                        cx, cy    = card_positions[slot]
 
                         hp_before = dict(hp)
                         drag(cx, cy, tx, ty, duration_ms=150)
@@ -1173,16 +1205,16 @@ class RoyaleBot:
                             prev_card=prev_card,
                         )
 
-                        # Collect reward data after a short settle window
-                        time.sleep(0.5)
-                        scr2 = screenshot()
-                        hp_after = sample_tower_hp(scr2)
-                        reward.record(entry, hp_before, hp_after, elixir)
+                        # Defer reward to next HP sample — removes blocking sleep
+                        pending_reward = {"entry": entry,
+                                          "hp_before": hp_before,
+                                          "elixir": elixir}
 
                         prev_card     = card_name
                         last_play_t   = time.time()
                         learned_wait  = WAIT_DB.sample_wait(state.phase)
-                        play_cooldown = learned_wait if learned_wait else human_play_interval()
+                        play_cooldown = (learned_wait if learned_wait
+                                         else human_play_interval(state.phase))
                         cards_played += 1
 
                         self.log(
@@ -1195,11 +1227,20 @@ class RoyaleBot:
                     if _wait_start is None:
                         _wait_start = time.time()
 
-                time.sleep(random.uniform(0.3, 0.7))
+                time.sleep(random.uniform(0.05, 0.15))
 
             except Exception as e:
                 self.log(f"Battle error: {e}")
                 time.sleep(1)
+
+        # Resolve any reward entry that didn't get a second HP sample
+        if pending_reward is not None:
+            try:
+                hp_final = sample_tower_hp(screenshot())
+                reward.record(pending_reward["entry"], pending_reward["hp_before"],
+                              hp_final, pending_reward["elixir"])
+            except Exception:
+                pass
 
         won  = result == "win"
         arch = archetype.archetype
