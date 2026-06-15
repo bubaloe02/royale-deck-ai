@@ -111,26 +111,45 @@ def is_battle_ended(screen):
     blue = cv2.inRange(hsv, (100, 180, 180), (125, 255, 255))
     return cv2.countNonZero(blue) > 400
 
-def did_win(screen):
+def find_ok_button(screen):
     """
-    Result screen layout (portrait):
-      ~28-46% height : opponent section  (their crowns, red/pink banner)
-      ~50-67% height : player section    (our crowns, blue banner)
-    Count gold crown pixels (HSV hue 20-35) in each band.
-    More gold on our side = win.
+    Locate the blue OK button by finding its centroid in the lower screen area.
+    Returns (x, y) in full-screen coordinates, or None if not found.
     """
     h, w = screen.shape[:2]
-    theirs = screen[int(h*0.28):int(h*0.46), int(w*0.15):int(w*0.85)]
-    ours   = screen[int(h*0.50):int(h*0.67), int(w*0.15):int(w*0.85)]
+    region = screen[int(h * 0.80):int(h * 0.95), int(w * 0.20):int(w * 0.80)]
+    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+    blue = cv2.inRange(hsv, (100, 180, 180), (125, 255, 255))
+    if cv2.countNonZero(blue) < 100:
+        return None
+    M = cv2.moments(blue)
+    if M["m00"] == 0:
+        return None
+    cx = int(M["m10"] / M["m00"]) + int(w * 0.20)
+    cy = int(M["m01"] / M["m00"]) + int(h * 0.80)
+    return cx, cy
 
-    def gold(region):
+def did_win(screen):
+    """
+    CR always places the WINNER at the bottom section and LOSER at the top.
+    The local player always has a BLUE banner; the opponent has RED/PINK.
+    → More blue pixels in the bottom band (60-68%) than top (30-38%) = we won.
+    → More blue at top = we lost.
+    This is immune to crown-count layout confusion.
+    """
+    h, w = screen.shape[:2]
+    bottom = screen[int(h*0.60):int(h*0.68), int(w*0.10):int(w*0.90)]
+    top    = screen[int(h*0.30):int(h*0.38), int(w*0.10):int(w*0.90)]
+
+    def blue_px(region):
         hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
-        return cv2.countNonZero(cv2.inRange(hsv, (20, 150, 150), (35, 255, 255)))
+        return cv2.countNonZero(cv2.inRange(hsv, (100, 100, 80), (130, 255, 255)))
 
-    our_g, their_g = gold(ours), gold(theirs)
+    bottom_blue = blue_px(bottom)
+    top_blue    = blue_px(top)
     if DEBUG:
-        print(f"[did_win] our_gold={our_g} their_gold={their_g}")
-    return our_g > their_g
+        print(f"[did_win] bottom_blue={bottom_blue} top_blue={top_blue} → {'WIN' if bottom_blue > top_blue else 'LOSS'}")
+    return bottom_blue > top_blue
 
 def get_elixir(screen):
     return min(10, int(_elixir_purple_count(screen) / 15))
@@ -392,20 +411,29 @@ class RoyaleBot:
 
     def dismiss_result(self):
         """
-        Tap through all post-battle screens:
-          result banner → chest popup → optional offer → home screen
-        OK button sits at ~87% height, centered.
-        We tap 6 times with short pauses to clear every screen that can appear.
+        Tap through all post-battle screens (result → chest → offer → home).
+        Each tap tries to find the blue OK button dynamically; falls back to
+        a fixed center-bottom position if the button isn't detected.
         """
         w, h = self.screen_w, self.screen_h
-        ok_x = int(w * 0.50)
-        ok_y = int(h * 0.87)
+        fallback_x = int(w * 0.50)
+        fallback_y = int(h * 0.88)
 
-        time.sleep(2)  # wait for result animation to finish
+        time.sleep(2)  # wait for result animation
         for i in range(6):
-            tap(ok_x, ok_y)
+            try:
+                scr = screenshot()
+                btn = find_ok_button(scr)
+                if btn:
+                    tap(btn[0], btn[1])
+                    self.log(f"👆 Dismiss {i+1}/6 → button at {btn}")
+                else:
+                    tap(fallback_x, fallback_y)
+                    self.log(f"👆 Dismiss {i+1}/6 → fallback ({fallback_x},{fallback_y})")
+            except Exception as e:
+                tap(fallback_x, fallback_y)
+                self.log(f"👆 Dismiss {i+1}/6 → fallback (err: {e})")
             time.sleep(1.2)
-            self.log(f"👆 Dismiss tap {i+1}/6")
 
     def play_battle(self):
         replay = ReplayLogger(self.screen_w, self.screen_h)
