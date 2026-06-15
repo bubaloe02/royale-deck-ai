@@ -986,7 +986,7 @@ try:
             ctk.set_default_color_theme("dark-blue")
             self.root = ctk.CTk()
             self.root.title("👑 RoyaleBot AI")
-            self.root.geometry("500x640")
+            self.root.geometry("500x700")
             self.root.resizable(False, False)
 
             header = ctk.CTkFrame(self.root, fg_color="#0a0a1a", corner_radius=0)
@@ -1026,6 +1026,21 @@ try:
             ctk.CTkLabel(self.root, textvariable=self.wr_var,
                 font=("Arial", 13), text_color="#ffd700").pack(pady=3)
 
+            # ── Player tag entry ──────────────────────────────────────────────
+            tf = ctk.CTkFrame(self.root, fg_color="#0d0d1f")
+            tf.pack(fill="x", padx=20, pady=(4, 0))
+            tf.grid_columnconfigure(1, weight=1)
+            ctk.CTkLabel(tf, text="Player Tag  #",
+                font=("Arial", 12), text_color="#888", width=100).grid(
+                row=0, column=0, padx=(10, 0), pady=8, sticky="w")
+            self.tag_entry = ctk.CTkEntry(tf,
+                font=("Arial", 13, "bold"),
+                fg_color="#070718", border_color="#333",
+                placeholder_text="ABC123",
+                height=34)
+            self.tag_entry.grid(row=0, column=1, padx=10, pady=8, sticky="ew")
+            self._load_config()
+
             lf = ctk.CTkFrame(self.root, fg_color="#050510")
             lf.pack(fill="both", expand=True, padx=20, pady=5)
             ctk.CTkLabel(lf, text="BOT LOG", font=("Arial", 10, "bold"),
@@ -1055,6 +1070,30 @@ try:
             ctk.CTkLabel(self.root, text=f"Replays → {REPLAY_DIR}",
                 font=("Arial", 10), text_color="#1a1a1a").pack(pady=5)
 
+        # ── Config persistence (saves player tag between sessions) ──────────
+        _CONFIG_PATH = os.path.join(REPLAY_DIR, "gui_config.json")
+
+        def _load_config(self):
+            try:
+                os.makedirs(REPLAY_DIR, exist_ok=True)
+                with open(self._CONFIG_PATH) as f:
+                    cfg = json.load(f)
+                tag = cfg.get("player_tag", "")
+                if tag:
+                    self.tag_entry.insert(0, tag)
+            except FileNotFoundError:
+                pass
+            except Exception as e:
+                print(f"Config load error: {e}")
+
+        def _save_config(self):
+            try:
+                os.makedirs(REPLAY_DIR, exist_ok=True)
+                with open(self._CONFIG_PATH, "w") as f:
+                    json.dump({"player_tag": self.tag_entry.get().strip()}, f)
+            except Exception as e:
+                print(f"Config save error: {e}")
+
         def log(self, msg):
             ts = datetime.now().strftime("%H:%M:%S")
             self.log_box.insert("end", f"[{ts}] {msg}\n")
@@ -1078,6 +1117,15 @@ try:
                 self.log(f"Screenshot error: {e}")
 
         def start(self):
+            global PLAYER_TAG
+            tag = self.tag_entry.get().strip().lstrip("#")
+            if not tag:
+                self.log("⚠️ Enter your player tag before starting!")
+                return
+            PLAYER_TAG = tag
+            self._save_config()
+            self.tag_entry.configure(state="disabled")
+
             self.bot = RoyaleBot(on_status=self.log)
             self.thread = threading.Thread(target=self.bot.run, daemon=True)
             self.thread.start()
@@ -1085,7 +1133,7 @@ try:
             self.status_lbl.configure(text="Running")
             self.start_btn.configure(state="disabled")
             self.stop_btn.configure(state="normal")
-            self.log("🤖 Bot started!")
+            self.log(f"🤖 Bot started! Tag: #{PLAYER_TAG}")
 
         def stop(self):
             if self.bot:
@@ -1094,6 +1142,7 @@ try:
             self.status_lbl.configure(text="Stopped")
             self.start_btn.configure(state="normal")
             self.stop_btn.configure(state="disabled")
+            self.tag_entry.configure(state="normal")
             self.log("⏹️ Bot stopped.")
 
         def run(self):
