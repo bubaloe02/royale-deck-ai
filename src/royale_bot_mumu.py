@@ -6,6 +6,7 @@ import requests
 import subprocess
 import json
 import os
+from collections import deque
 from PIL import Image
 from datetime import datetime, timezone
 import io
@@ -24,19 +25,10 @@ DEBUG_NO_JITTER   = True
 DEBUG_SAVE_COORDS = True
 BATTLE_DEBOUNCE   = 2
 
-# ─── DECK CONFIG ─────────────────────────────────────────────────────────────
-# Your 8-card deck in cycle order (slot 0-3 = starting hand).
-# Replace with your actual cards — used for rotation tracking + dispatch.
-MY_DECK = [
-    "slot_0",   # starting hand slot 0  ← replace: e.g. "Hog Rider"
-    "slot_1",   # starting hand slot 1
-    "slot_2",   # starting hand slot 2
-    "slot_3",   # starting hand slot 3
-    "slot_4",   # 5th card (drawn after slot 0 played)
-    "slot_5",
-    "slot_6",
-    "slot_7",
-]
+# ─── PLAYER CONFIG ───────────────────────────────────────────────────────────
+# Your Clash Royale player tag WITHOUT the leading #.
+# e.g. if your tag is #ABC123, set PLAYER_TAG = "ABC123"
+PLAYER_TAG = ""
 
 # ─── CARD TYPE REGISTRY ──────────────────────────────────────────────────────
 CARD_TYPES = {
@@ -55,6 +47,32 @@ CARD_TYPES = {
 
 def card_type(card_name):
     return CARD_TYPES.get(card_name, "troop")
+
+# ─── DECK FETCHER ─────────────────────────────────────────────────────────────
+_SLOT_FALLBACK = [f"slot_{i}" for i in range(8)]
+
+def fetch_deck():
+    """
+    Fetch the player's current deck from the worker API.
+    Returns a list of 8 card-name strings.
+    Falls back to slot placeholders if the tag is unset or the request fails.
+    """
+    if not PLAYER_TAG:
+        print("[deck] PLAYER_TAG not set — using slot placeholders")
+        return list(_SLOT_FALLBACK)
+    try:
+        url  = f"{WORKER_URL}/v1/players/%23{PLAYER_TAG}"
+        resp = requests.get(url, timeout=8)
+        resp.raise_for_status()
+        cards = resp.json().get("currentDeck", [])
+        names = [c["name"] for c in cards]
+        if len(names) == 8:
+            print(f"[deck] Fetched: {names}")
+            return names
+        print(f"[deck] Unexpected deck length ({len(names)}) — using placeholders")
+    except Exception as e:
+        print(f"[deck] Fetch failed ({e}) — using placeholders")
+    return list(_SLOT_FALLBACK)
 
 # ─── NAMED TILE MAP ──────────────────────────────────────────────────────────
 # (x_frac, y_frac); y < 0.50 = opponent territory, y > 0.50 = own territory
@@ -138,29 +156,32 @@ class EnemyElixirTracker:
 # ─── CARD ROTATION TRACKER (#3) ──────────────────────────────────────────────
 class CardRotation:
     """
-    Tracks which card is in each of the 4 hand slots across the 8-card cycle.
-    When a slot is played, the next card from the cycle enters that slot.
+    Simulates Clash Royale's 8-card cycle with a deque.
+    hand[0..3]  = currently visible slots
+    draw_pile   = the next 4 cards waiting to come in
 
-    With template matching: card names are real.
-    Without it: slot_0..slot_7 are used as placeholders.
+    When slot S is played:
+      - the played card goes to the back of draw_pile
+      - the front of draw_pile slides into hand[S]
     """
-    def __init__(self, deck=None):
-        if deck is None:
-            deck = MY_DECK
-        self.deck       = list(deck)
-        self.hand       = list(deck[:4])
-        self._cycle_pos = 4   # next card to draw from deck
+    def __init__(self, deck):
+        self._hand      = deque(deck[:4])
+        self._draw_pile = deque(deck[4:])
 
     def play(self, slot):
-        """Mark slot as played; pull next card from cycle into it."""
-        played = self.hand[slot]
-        next_card = self.deck[self._cycle_pos % len(self.deck)]
-        self._cycle_pos += 1
-        self.hand[slot] = next_card
+        """Play card at slot; returns card name played."""
+        played = self._hand[slot]
+        if self._draw_pile:
+            self._hand[slot] = self._draw_pile.popleft()
+            self._draw_pile.append(played)
         return played
 
     def card_at(self, slot):
-        return self.hand[slot]
+        return self._hand[slot]
+
+    @property
+    def hand(self):
+        return list(self._hand)
 
 # ─── LANE PRESSURE TRACKER (#5) ──────────────────────────────────────────────
 class LanePressureTracker:
@@ -524,13 +545,13 @@ class RewardEngine:
 class ReplayLogger:
     HP_SAMPLE_INTERVAL = 10
 
-    def __init__(self, screen_w, screen_h):
+    def __init__(self, screen_w, screen_h, deck):
         ts = datetime.now(timezone.utc)
         self.battle_id  = f"bot_{ts.strftime('%Y%m%d_%H%M%S')}_{random.randint(1000,9999)}"
         self.started_at = ts.isoformat()
         self.screen_w   = screen_w
         self.screen_h   = screen_h
-        self.our_deck   = list(MY_DECK[:4])
+        self.our_deck   = list(deck)          # all 8 cards in cycle order
         self.placements        = []
         self.tower_hp_timeline = []
         self._start_time      = time.time()
@@ -650,8 +671,9 @@ class RoyaleBot:
             time.sleep(1.2)
 
     def play_battle(self):
-        replay   = ReplayLogger(self.screen_w, self.screen_h)
-        rotation = CardRotation()
+        deck     = fetch_deck()
+        replay   = ReplayLogger(self.screen_w, self.screen_h, deck)
+        rotation = CardRotation(deck)
         state    = BattleStateMachine()
         lane_p   = LanePressureTracker()
         enemy_ex = EnemyElixirTracker()
