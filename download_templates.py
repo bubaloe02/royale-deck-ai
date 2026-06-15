@@ -1,11 +1,12 @@
-import subprocess
+import urllib.request
+import zipfile
 import os
 import shutil
-import glob
+import io
 
 REPOS = [
-    ("https://github.com/pyclashbot/py-clash-bot.git", r"C:\py-clash-bot"),
-    ("https://github.com/jlaiii/TKH.git",              r"C:\TKH"),
+    ("https://github.com/pyclashbot/py-clash-bot/archive/refs/heads/main.zip", r"C:\py-clash-bot"),
+    ("https://github.com/jlaiii/TKH/archive/refs/heads/main.zip",              r"C:\TKH"),
 ]
 TEMPLATES_DIR = r"C:\templates"
 
@@ -13,29 +14,45 @@ os.makedirs(TEMPLATES_DIR, exist_ok=True)
 
 for url, dest in REPOS:
     if os.path.exists(dest):
-        print(f"[skip] {dest} already exists — not re-cloning")
+        print(f"[skip] {dest} already exists")
     else:
-        print(f"[clone] {url} → {dest}")
-        result = subprocess.run(
-            f'git clone --depth 1 "{url}" "{dest}"',
-            capture_output=True, text=True, shell=True
-        )
-        if result.returncode != 0:
-            print(f"  ERROR: {result.stderr.strip()}")
-        else:
-            print(f"  OK")
+        print(f"[download] {url}")
+        try:
+            with urllib.request.urlopen(url, timeout=60) as resp:
+                data = resp.read()
+            print(f"  downloaded {len(data)//1024} KB — extracting...")
+            with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                zf.extractall(os.path.dirname(dest))
+            # GitHub zips extract as <repo>-main — rename to dest
+            extracted = [
+                os.path.join(os.path.dirname(dest), d)
+                for d in os.listdir(os.path.dirname(dest))
+                if d.endswith("-main") and os.path.isdir(
+                    os.path.join(os.path.dirname(dest), d))
+            ]
+            for folder in extracted:
+                if not os.path.exists(dest):
+                    os.rename(folder, dest)
+                    break
+            print(f"  OK → {dest}")
+        except Exception as e:
+            print(f"  ERROR: {e}")
 
 copied = []
 for _, repo_dir in REPOS:
-    for src in glob.glob(os.path.join(repo_dir, "**", "*.png"), recursive=True):
-        filename = os.path.basename(src)
-        dst = os.path.join(TEMPLATES_DIR, filename)
-        # Keep the first file if names collide; rename duplicates
-        if os.path.exists(dst):
-            repo_name = os.path.basename(repo_dir)
-            dst = os.path.join(TEMPLATES_DIR, f"{repo_name}_{filename}")
-        shutil.copy2(src, dst)
-        copied.append(os.path.basename(dst))
+    if not os.path.exists(repo_dir):
+        print(f"[warn] {repo_dir} missing — skipping PNG copy")
+        continue
+    for root, _, files in os.walk(repo_dir):
+        for fname in files:
+            if fname.lower().endswith(".png"):
+                src = os.path.join(root, fname)
+                dst = os.path.join(TEMPLATES_DIR, fname)
+                if os.path.exists(dst):
+                    repo_name = os.path.basename(repo_dir)
+                    dst = os.path.join(TEMPLATES_DIR, f"{repo_name}_{fname}")
+                shutil.copy2(src, dst)
+                copied.append(os.path.basename(dst))
 
 print(f"\n[done] Copied {len(copied)} PNG files to {TEMPLATES_DIR}")
 for name in sorted(copied):
