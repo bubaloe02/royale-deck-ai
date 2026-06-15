@@ -1067,6 +1067,7 @@ class RoyaleBot:
         self._coords_saved    = False
         self._cached_deck     = None   # refreshed every 5 battles
         self._break_taken_at  = -1    # tracks which battle count last triggered a break
+        self.anti_detect      = True   # pause every 10 battles; toggled by GUI
 
     def _get_deck(self):
         if self._cached_deck is None or self.battles_played % 5 == 0:
@@ -1389,7 +1390,8 @@ class RoyaleBot:
 
                 # Anti-detection break every 10 battles (guard against re-trigger)
                 b = self.battles_played
-                if (b > 0 and b % 10 == 0 and b != self._break_taken_at):
+                if (self.anti_detect and b > 0
+                        and b % 10 == 0 and b != self._break_taken_at):
                     self._break_taken_at = b
                     brk = random.randint(120, 300)
                     self.log(f"☕ Anti-detection break: {brk}s")
@@ -1472,6 +1474,21 @@ try:
                 placeholder_text="ABC123",
                 height=34)
             self.tag_entry.grid(row=0, column=1, padx=10, pady=8, sticky="ew")
+
+            # ── Options row ───────────────────────────────────────────────────
+            of = ctk.CTkFrame(self.root, fg_color="#0d0d1f")
+            of.pack(fill="x", padx=20, pady=(0, 4))
+            self.anti_detect_var = ctk.BooleanVar(value=True)
+            self.anti_detect_cb  = ctk.CTkCheckBox(
+                of,
+                text="Anti-detection breaks (pause every 10 battles)",
+                variable=self.anti_detect_var,
+                font=("Arial", 11), text_color="#888",
+                fg_color="#ff6f00", hover_color="#e65100",
+                checkmark_color="#fff",
+            )
+            self.anti_detect_cb.pack(anchor="w", padx=12, pady=6)
+
             self._load_config()
 
             lf = ctk.CTkFrame(self.root, fg_color="#050510")
@@ -1514,6 +1531,7 @@ try:
                 tag = cfg.get("player_tag", "")
                 if tag:
                     self.tag_entry.insert(0, tag)
+                self.anti_detect_var.set(cfg.get("anti_detect", True))
             except FileNotFoundError:
                 pass
             except Exception as e:
@@ -1523,7 +1541,10 @@ try:
             try:
                 os.makedirs(REPLAY_DIR, exist_ok=True)
                 with open(self._CONFIG_PATH, "w") as f:
-                    json.dump({"player_tag": self.tag_entry.get().strip()}, f)
+                    json.dump({
+                        "player_tag":  self.tag_entry.get().strip(),
+                        "anti_detect": self.anti_detect_var.get(),
+                    }, f)
             except Exception as e:
                 print(f"Config save error: {e}")
 
@@ -1558,15 +1579,18 @@ try:
             PLAYER_TAG = tag
             self._save_config()
             self.tag_entry.configure(state="disabled")
+            self.anti_detect_cb.configure(state="disabled")
 
             self.bot = RoyaleBot(on_status=self.log)
+            self.bot.anti_detect = self.anti_detect_var.get()
             self.thread = threading.Thread(target=self.bot.run, daemon=True)
             self.thread.start()
             self.dot.configure(text_color="#4caf50")
             self.status_lbl.configure(text="Running")
             self.start_btn.configure(state="disabled")
             self.stop_btn.configure(state="normal")
-            self.log(f"🤖 Bot started! Tag: #{PLAYER_TAG}")
+            ad = "ON" if self.bot.anti_detect else "OFF"
+            self.log(f"🤖 Bot started! Tag: #{PLAYER_TAG}  Anti-detect: {ad}")
 
         def stop(self):
             if self.bot:
@@ -1576,6 +1600,7 @@ try:
             self.start_btn.configure(state="normal")
             self.stop_btn.configure(state="disabled")
             self.tag_entry.configure(state="normal")
+            self.anti_detect_cb.configure(state="normal")
             self.log("⏹️ Bot stopped.")
 
         def run(self):
