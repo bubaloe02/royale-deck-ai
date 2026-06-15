@@ -30,23 +30,78 @@ BATTLE_DEBOUNCE   = 2
 # e.g. if your tag is #ABC123, set PLAYER_TAG = "ABC123"
 PLAYER_TAG = ""
 
-# ─── CARD TYPE REGISTRY ──────────────────────────────────────────────────────
+# ─── CARD TYPE REGISTRY (10 categories) ─────────────────────────────────────
 CARD_TYPES = {
-    "Knight": "troop", "Hog Rider": "troop", "Musketeer": "troop",
-    "Mini P.E.K.K.A": "troop", "Valkyrie": "troop", "Baby Dragon": "troop",
-    "Mega Minion": "troop", "Prince": "troop", "Giant": "troop",
-    "Goblin Gang": "troop", "Skeleton Army": "troop", "Ice Spirit": "troop",
-    "Goblin": "troop", "Archer": "troop", "Minion Horde": "troop",
-    "Electro Wizard": "troop", "Witch": "troop", "Lumberjack": "troop",
+    # Tanks — high HP, slow, anchor pushes
+    "Giant": "tank", "Golem": "tank", "P.E.K.K.A": "tank",
+    "Giant Skeleton": "tank", "Lava Hound": "tank", "Royal Giant": "tank",
+    "Balloon": "tank",
+    # Mini tanks — moderate HP, defensive backbone
+    "Knight": "mini_tank", "Valkyrie": "mini_tank", "Mini P.E.K.K.A": "mini_tank",
+    "Dark Prince": "mini_tank", "Ice Golem": "mini_tank", "Guards": "mini_tank",
+    "Barbarians": "mini_tank",
+    # Win conditions — primary damage dealers
+    "Hog Rider": "win_condition", "Miner": "win_condition",
+    "Goblin Barrel": "win_condition", "Three Musketeers": "win_condition",
+    # Support — ranged/splash behind push
+    "Musketeer": "support", "Witch": "support", "Electro Wizard": "support",
+    "Baby Dragon": "support", "Mega Minion": "support", "Bomber": "support",
+    "Executioner": "support", "Bowler": "support", "Prince": "support",
+    "Lumberjack": "support",
+    # Cycle — cheap fast cards, keep rotation moving
+    "Ice Spirit": "cycle", "Skeletons": "cycle", "Bats": "cycle",
+    "Goblin": "cycle", "Goblin Gang": "cycle",
+    # Small spells — cheap utility/clear
+    "Zap": "spell_small", "Arrows": "spell_small", "Log": "spell_small",
+    "Freeze": "spell_small", "Tornado": "spell_small", "Earthquake": "spell_small",
+    "Giant Snowball": "spell_small",
+    # Big spells — high damage, need a target clump
+    "Fireball": "spell_big", "Lightning": "spell_big", "Rocket": "spell_big",
+    "Poison": "spell_big", "Clone": "spell_big",
+    # Buildings — defensive structures
     "Tesla": "building", "Cannon": "building", "Inferno Tower": "building",
     "Bomb Tower": "building", "X-Bow": "building", "Mortar": "building",
-    "Fireball": "spell", "Arrows": "spell", "Zap": "spell",
-    "Lightning": "spell", "Rocket": "spell", "Goblin Barrel": "spell",
-    "Freeze": "spell", "Poison": "spell", "Log": "spell",
+    "Furnace": "building", "Goblin Cage": "building", "Elixir Collector": "building",
+    # Air support — flying units
+    "Minion Horde": "air_support", "Minions": "air_support",
+    "Skeleton Army": "air_support", "Inferno Dragon": "air_support",
+    "Electro Dragon": "air_support",
 }
 
+# Cards that behave like troops for placement purposes
+_TROOP_LIKE = {"tank", "mini_tank", "win_condition", "support", "cycle", "air_support"}
+# Cards that are spells
+_SPELL_LIKE = {"spell_small", "spell_big"}
+
 def card_type(card_name):
-    return CARD_TYPES.get(card_name, "troop")
+    return CARD_TYPES.get(card_name, "mini_tank")
+
+# ─── SPELL RADII (proportional arena width) ──────────────────────────────────
+SPELL_RADII = {
+    "Fireball": 0.15, "Poison": 0.18, "Rocket": 0.10, "Lightning": 0.13,
+    "Clone": 0.16, "Freeze": 0.16, "Arrows": 0.20, "Zap": 0.10,
+    "Log": 0.08, "Tornado": 0.14, "Earthquake": 0.18, "Giant Snowball": 0.12,
+}
+_DEFAULT_SPELL_RADIUS = 0.12
+
+def spell_target_value(card_name, tx_norm, ty_norm, troops):
+    """Count troops within this spell's radius. Used to gate casting."""
+    r = SPELL_RADII.get(card_name, _DEFAULT_SPELL_RADIUS)
+    return sum(
+        1 for t in troops
+        if ((t["x_norm"] - tx_norm) ** 2 + (t["y_norm"] - ty_norm) ** 2) ** 0.5 <= r
+    )
+
+# ─── OPPONENT ARCHETYPE SIGNALS ──────────────────────────────────────────────
+_ARCHETYPE_SIGNALS = {
+    "beatdown":    ["Giant", "Golem", "P.E.K.K.A", "Giant Skeleton", "Lava Hound",
+                    "Royal Giant", "Balloon"],
+    "cycle":       ["Ice Spirit", "Skeletons", "Ice Golem", "Bats", "Log"],
+    "control":     ["X-Bow", "Mortar", "Tesla", "Inferno Tower", "Cannon"],
+    "bridge_spam": ["Battle Ram", "Bandit", "Dark Prince", "Goblin Gang"],
+    "log_bait":    ["Goblin Barrel", "Princess", "Dart Goblin", "Goblin Gang"],
+    "three_m":     ["Three Musketeers", "Elixir Collector"],
+}
 
 # ─── DECK FETCHER ─────────────────────────────────────────────────────────────
 _SLOT_FALLBACK = [f"slot_{i}" for i in range(8)]
@@ -279,10 +334,21 @@ def _tile(name, w, h):
     return x, y, name   # (px, py, tile_name)
 
 def place_troop(card_name, phase, lane: LanePressureTracker, w, h):
-    """Bridge pressure during attack; defend hot lane when threatened."""
+    """Place troop with type-aware and phase-aware tile selection."""
+    ctype = card_type(card_name)
+
     if phase == PHASE_DEFENDING and lane.hot_lane:
         pool = (["defense_left", "support_left"] if lane.hot_lane == "left"
                 else ["defense_right", "support_right"])
+    elif ctype == "win_condition":
+        # Win conditions always go to bridge regardless of phase
+        if lane.hot_lane:
+            pool = (["bridge_left"] if lane.hot_lane == "left" else ["bridge_right"])
+        else:
+            pool = ["bridge_left", "bridge_right"]
+    elif ctype == "tank" and phase == PHASE_OPENING:
+        # Don't rush a tank at the start — place it back for a safe push
+        pool = ["support_left", "support_right"]
     elif phase == PHASE_COUNTERPUSH and lane.hot_lane:
         pool = (["bridge_left", "push_left"] if lane.hot_lane == "left"
                 else ["bridge_right", "push_right"])
@@ -293,8 +359,11 @@ def place_troop(card_name, phase, lane: LanePressureTracker, w, h):
         pool = ["bridge_left", "bridge_right", "bridge_center",
                 "support_left", "support_right"]
     else:  # opening
-        pool = ["support_left", "support_right", "support_center",
-                "bridge_left", "bridge_right"]
+        if ctype == "cycle":
+            pool = ["bridge_left", "bridge_right"]   # cheap cards can go bridge early
+        else:
+            pool = ["support_left", "support_right", "support_center",
+                    "bridge_left", "bridge_right"]
     return _tile(random.choice(pool), w, h)
 
 def place_building(card_name, phase, lane: LanePressureTracker, w, h):
@@ -308,14 +377,17 @@ def place_building(card_name, phase, lane: LanePressureTracker, w, h):
                 "safe_building_l", "safe_building_r"]
     return _tile(random.choice(pool), w, h)
 
-def place_spell(card_name, phase, lane: LanePressureTracker, game_time, w, h):
+def place_spell(card_name, phase, lane: LanePressureTracker, game_time, w, h,
+                troops=None):
     """
     Spells target enemy territory, preferring the hot lane.
-    Skip entirely if game is too early and there's no meaningful target.
-    Returns None if spell should be held.
+    Gates on spell_target_value when troops are detected:
+      spell_big  requires ≥1 troop in radius
+      spell_small requires ≥3 troops in radius (not worth a small spell on 1 unit)
+    Returns None to hold the card.
     """
     if game_time < 20:
-        return None   # no clump yet — don't waste it
+        return None
 
     if lane.hot_lane == "left":
         pool = ["spell_left", "push_left"]
@@ -324,9 +396,18 @@ def place_spell(card_name, phase, lane: LanePressureTracker, game_time, w, h):
     else:
         pool = ["spell_left", "spell_right", "spell_center"]
 
-    return _tile(random.choice(pool), w, h)
+    x, y, name = _tile(random.choice(pool), w, h)
 
-def get_play_position(card_name, phase, lane_pressure, game_time, w, h):
+    if troops:
+        tx_n, ty_n = x / w, y / h
+        value = spell_target_value(card_name, tx_n, ty_n, troops)
+        min_hit = 1 if card_type(card_name) == "spell_big" else 3
+        if value < min_hit:
+            return None   # not enough targets — hold it
+
+    return x, y, name
+
+def get_play_position(card_name, phase, lane_pressure, game_time, w, h, troops=None):
     """
     Returns (x, y, tile_name) or None (meaning: hold this card).
     Tries PLACEMENT_DB learned distribution first; falls back to heuristics.
@@ -341,12 +422,12 @@ def get_play_position(card_name, phase, lane_pressure, game_time, w, h):
             print(f"  [DB] {card_name} → learned ({x_n:.3f},{y_n:.3f})")
         return int(x_n * w), int(y_n * h), "learned"
 
-    if ctype == "troop":
+    if ctype in _TROOP_LIKE:
         return place_troop(card_name, phase, lane_pressure, w, h)
     elif ctype == "building":
         return place_building(card_name, phase, lane_pressure, w, h)
-    elif ctype == "spell":
-        return place_spell(card_name, phase, lane_pressure, game_time, w, h)
+    elif ctype in _SPELL_LIKE:
+        return place_spell(card_name, phase, lane_pressure, game_time, w, h, troops)
     return place_troop(card_name, phase, lane_pressure, w, h)
 
 # ─── PLACEMENT DATABASE ───────────────────────────────────────────────────────
@@ -406,6 +487,231 @@ class PlacementDB:
                 if len(v) >= self.MIN_SAMPLES}
 
 PLACEMENT_DB = PlacementDB()
+
+# ─── TROOP DETECTOR (#1) ─────────────────────────────────────────────────────
+
+class TroopDetector:
+    """
+    Detects moving units in the arena via frame differencing.
+    Returns list of {"x_norm", "y_norm"} blobs — positions only, no card names.
+    Used for: spell value calculation, battlefield awareness.
+    """
+    _ARENA_Y0    = 0.15
+    _ARENA_Y1    = 0.85
+    _MIN_AREA    = 150    # px² — ignore tiny noise blobs
+    _DIFF_THRESH = 20     # pixel diff threshold
+
+    def __init__(self):
+        self._prev = None
+
+    def detect(self, screen):
+        h, w = screen.shape[:2]
+        arena = screen[int(h * self._ARENA_Y0):int(h * self._ARENA_Y1), :]
+        gray  = cv2.cvtColor(arena, cv2.COLOR_BGR2GRAY)
+        gray  = cv2.GaussianBlur(gray, (5, 5), 0)
+
+        if self._prev is None or self._prev.shape != gray.shape:
+            self._prev = gray
+            return []
+
+        diff   = cv2.absdiff(self._prev, gray)
+        _, thr = cv2.threshold(diff, self._DIFF_THRESH, 255, cv2.THRESH_BINARY)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+        thr    = cv2.morphologyEx(thr, cv2.MORPH_CLOSE, kernel)
+        self._prev = gray
+
+        ay0 = int(h * self._ARENA_Y0)
+        troops = []
+        for c in cv2.findContours(thr, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]:
+            if cv2.contourArea(c) < self._MIN_AREA:
+                continue
+            M = cv2.moments(c)
+            if M["m00"] == 0:
+                continue
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"]) + ay0
+            troops.append({"x_norm": round(cx / w, 3), "y_norm": round(cy / h, 3)})
+        return troops
+
+# ─── WAIT DB (#4) ────────────────────────────────────────────────────────────
+
+class WaitDB:
+    """
+    Learns waiting durations per phase from historical wait_events.
+    Once MIN_SAMPLES exist, sample_wait() replaces human_play_interval().
+    """
+    MIN_SAMPLES = 25
+
+    def __init__(self):
+        self._data = {}   # phase → [duration_s, ...]
+        self._path = os.path.join(REPLAY_DIR, "wait_db.json")
+        self._load()
+
+    def _load(self):
+        try:
+            with open(self._path) as f:
+                self._data = json.load(f)
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            print(f"[WaitDB] Load error: {e}")
+
+    def save(self):
+        os.makedirs(REPLAY_DIR, exist_ok=True)
+        with open(self._path, "w") as f:
+            json.dump(self._data, f)
+
+    def record_battle(self, wait_events):
+        for ev in wait_events:
+            ms = ev.get("duration_ms", 0)
+            if ms < 200:
+                continue   # ignore sub-200ms noise
+            phase = ev.get("phase", "mid")
+            self._data.setdefault(phase, []).append(round(ms / 1000.0, 2))
+
+    def sample_wait(self, phase):
+        entries = self._data.get(phase, [])
+        if len(entries) < self.MIN_SAMPLES:
+            return None
+        return random.choice(entries)
+
+# ─── COMBO TRACKER (#5) ──────────────────────────────────────────────────────
+
+class ComboTracker:
+    """
+    Tracks (prev_card, card, phase) → win-rate to learn effective sequences.
+    score_follow_up() returns a 0-1 quality score for a card given the previous.
+    """
+    MIN_SAMPLES = 10
+
+    def __init__(self):
+        self._data = {}   # key → {"wins": N, "total": N}
+        self._path = os.path.join(REPLAY_DIR, "combo_db.json")
+        self._load()
+
+    def _load(self):
+        try:
+            with open(self._path) as f:
+                self._data = json.load(f)
+        except FileNotFoundError:
+            pass
+
+    def save(self):
+        os.makedirs(REPLAY_DIR, exist_ok=True)
+        with open(self._path, "w") as f:
+            json.dump(self._data, f)
+
+    def record(self, prev_card, card, phase, won):
+        key = f"{prev_card}|{card}|{phase}"
+        e   = self._data.setdefault(key, {"wins": 0, "total": 0})
+        e["total"] += 1
+        if won:
+            e["wins"] += 1
+
+    def score_follow_up(self, prev_card, card, phase):
+        """Win rate 0-1, or 0.5 when insufficient data."""
+        e = self._data.get(f"{prev_card}|{card}|{phase}")
+        if not e or e["total"] < self.MIN_SAMPLES:
+            return 0.5
+        return e["wins"] / e["total"]
+
+# ─── ARCHETYPE DETECTOR (#6) ─────────────────────────────────────────────────
+
+class ArchetypeDetector:
+    """
+    Classifies opponent deck archetype from observed cards.
+    Scaffold: call .observe(card_name) when visual detection lands.
+    """
+    def __init__(self):
+        self.seen = set()
+
+    def observe(self, card_name):
+        self.seen.add(card_name)
+
+    @property
+    def archetype(self):
+        scores = {arch: sum(1 for c in cards if c in self.seen)
+                  for arch, cards in _ARCHETYPE_SIGNALS.items()}
+        best = max(scores, key=scores.get)
+        return best if scores[best] > 0 else "unknown"
+
+    @property
+    def should_rush(self):
+        return self.archetype in ("log_bait", "three_m")
+
+    @property
+    def should_defend(self):
+        return self.archetype in ("beatdown", "bridge_spam")
+
+# ─── OPPONENT CYCLE TRACKER (#7) ─────────────────────────────────────────────
+
+class OpponentCycleTracker:
+    """
+    Tracks opponent cards played in order.
+    Once 4 unique cards are seen, cycle repeats and likely_next() works.
+    Scaffold: call .observe(card_name) from visual card detection when ready.
+    """
+    def __init__(self):
+        self._log    = []   # all plays in order
+        self._unique = []   # unique cards in first-seen order
+
+    def observe(self, card_name):
+        self._log.append(card_name)
+        if card_name not in self._unique:
+            self._unique.append(card_name)
+
+    def likely_next(self):
+        if len(self._unique) < 4:
+            return None
+        pos = len(self._log) % len(self._unique)
+        return self._unique[pos]
+
+    @property
+    def cards_seen(self):
+        return list(self._unique)
+
+# ─── HAND SCORER (#5 + combo) ────────────────────────────────────────────────
+
+def score_hand(hand, prev_card, phase, lane_p, game_time, troops=None):
+    """
+    Score each card slot (0-3) and return the best slot to play.
+    Combines phase-fit heuristic + learned combo win rates.
+    """
+    scores = {}
+    for slot, card in enumerate(hand):
+        ctype  = card_type(card)
+        score  = 0.0
+
+        # Phase fit
+        if phase == PHASE_DEFENDING:
+            if ctype in ("mini_tank", "building", "spell_small"):
+                score += 3
+        elif phase == PHASE_COUNTERPUSH:
+            if ctype in ("win_condition", "tank", "support"):
+                score += 3
+        elif phase in (PHASE_DOUBLE, PHASE_OVERTIME):
+            if ctype in ("win_condition", "spell_big"):
+                score += 2
+
+        # Archetype fit: prefer win_condition when rushing is advised
+        if lane_p.hot_lane is None and ctype == "win_condition":
+            score += 1
+
+        # Combo bonus
+        score += COMBO_DB.score_follow_up(prev_card, card, phase) * 2
+
+        # Spell penalty when there are no targets early
+        if ctype in _SPELL_LIKE and game_time < 30:
+            score -= 4
+        elif ctype in _SPELL_LIKE and troops is not None and len(troops) < 2:
+            score -= 2
+
+        scores[slot] = score
+
+    return max(scores, key=scores.get)
+
+WAIT_DB  = WaitDB()
+COMBO_DB = ComboTracker()
 
 # ─── ADB CONTROLLER ──────────────────────────────────────────────────────────
 
@@ -598,13 +904,16 @@ class RewardEngine:
         their_dmg = (hp_before.get("our_left",  100) - hp_after.get("our_left",  100) +
                      hp_before.get("our_right", 100) - hp_after.get("our_right", 100) +
                      hp_before.get("our_king",  100) - hp_after.get("our_king",  100))
+        # Exchange value: damage delta per elixir spent
+        # Positive = we profited from this card play
+        exchange = round((our_dmg - their_dmg) / max(1, elixir_spent), 3)
         self.events.append({
             **placement,
             "our_tower_dmg":   round(our_dmg,   2),
             "their_tower_dmg": round(their_dmg, 2),
             "elixir_spent":    elixir_spent,
-            # EV placeholder — will be set by future reward model
-            "ev": None,
+            "exchange_ratio":  exchange,
+            "ev":              None,   # populated by future reward model
         })
 
 # ─── REPLAY LOGGER ───────────────────────────────────────────────────────────
@@ -661,41 +970,43 @@ class ReplayLogger:
         self.placements.append(entry)
         return entry
 
-    def log_wait(self, reason, duration_ms):
+    def log_wait(self, reason, duration_ms, phase=""):
         """Record a hold decision — used to learn human waiting behaviour."""
         self.wait_events.append({
             "game_time_ms": self.elapsed_ms(),
             "reason":       reason,
             "duration_ms":  duration_ms,
+            "phase":        phase,
         })
 
-    def to_dict(self, result="unknown", reward_events=None):
+    def to_dict(self, result="unknown", reward_events=None, opponent_archetype="unknown"):
         return {
-            "battle_id":         self.battle_id,
-            "started_at":        self.started_at,
-            "result":            result,
-            "duration_ms":       self.elapsed_ms(),
-            "source":            "bot_mumu",
-            "our_deck":          self.our_deck,
-            "placements":        self.placements,
-            "tower_hp_timeline": self.tower_hp_timeline,
-            "wait_events":       self.wait_events,
-            "reward_events":     reward_events or [],
+            "battle_id":           self.battle_id,
+            "started_at":          self.started_at,
+            "result":              result,
+            "duration_ms":         self.elapsed_ms(),
+            "source":              "bot_mumu",
+            "our_deck":            self.our_deck,
+            "opponent_archetype":  opponent_archetype,
+            "placements":          self.placements,
+            "tower_hp_timeline":   self.tower_hp_timeline,
+            "wait_events":         self.wait_events,
+            "reward_events":       reward_events or [],
         }
 
-    def save_local(self, result="unknown", reward_events=None):
+    def save_local(self, result="unknown", reward_events=None, opponent_archetype="unknown"):
         os.makedirs(REPLAY_DIR, exist_ok=True)
         path = os.path.join(REPLAY_DIR, f"{self.battle_id}.json")
         with open(path, "w") as f:
-            json.dump(self.to_dict(result, reward_events), f, indent=2)
+            json.dump(self.to_dict(result, reward_events, opponent_archetype), f, indent=2)
         print(f"Replay saved → {path}")
         return path
 
-    def send_to_worker(self, result="unknown", reward_events=None):
+    def send_to_worker(self, result="unknown", reward_events=None, opponent_archetype="unknown"):
         try:
             res = requests.post(
                 f"{WORKER_URL}/bot/battle",
-                json=self.to_dict(result, reward_events),
+                json=self.to_dict(result, reward_events, opponent_archetype),
                 timeout=10,
             )
             return res.ok
@@ -752,13 +1063,16 @@ class RoyaleBot:
             time.sleep(1.2)
 
     def play_battle(self):
-        deck     = fetch_deck()
-        replay   = ReplayLogger(self.screen_w, self.screen_h, deck)
-        rotation = CardRotation(deck)
-        state    = BattleStateMachine()
-        lane_p   = LanePressureTracker()
-        enemy_ex = EnemyElixirTracker()
-        reward   = RewardEngine()
+        deck        = fetch_deck()
+        replay      = ReplayLogger(self.screen_w, self.screen_h, deck)
+        rotation    = CardRotation(deck)
+        state       = BattleStateMachine()
+        lane_p      = LanePressureTracker()
+        enemy_ex    = EnemyElixirTracker()
+        reward      = RewardEngine()
+        troop_det   = TroopDetector()
+        archetype   = ArchetypeDetector()
+        opp_cycle   = OpponentCycleTracker()
 
         self.log(f"⚔️ Battle #{self.battles_played + 1} | id={replay.battle_id}")
 
@@ -805,15 +1119,16 @@ class RoyaleBot:
                 enemy_ex.update(is_double=state.is_double)
                 state.update(game_time, lane_p)
 
+                troops = troop_det.detect(screen)
                 elixir = get_elixir(screen)
 
                 if DEBUG:
                     self.log(
                         f"💧 {elixir}/10  t={int(game_time)}s  "
-                        f"phase={state.phase}  "
+                        f"phase={state.phase}  arch={archetype.archetype}  "
                         f"lane L={lane_p.left:.0f} R={lane_p.right:.0f}  "
                         f"enemy_ex≈{enemy_ex.estimate:.1f}  "
-                        f"hand={rotation.hand}"
+                        f"troops={len(troops)}  hand={rotation.hand}"
                     )
 
                 # Decide whether to play
@@ -824,21 +1139,24 @@ class RoyaleBot:
                 if cooldown_ok and elixir_ok and not skip_rand:
                     # Flush any wait period that just ended
                     if _wait_start is not None:
-                        replay.log_wait("cooldown", int((time.time() - _wait_start) * 1000))
+                        replay.log_wait("cooldown",
+                                        int((time.time() - _wait_start) * 1000),
+                                        state.phase)
                         _wait_start = None
 
-                    slot      = cards_played % 4
+                    # Pick best slot from hand (combo + phase scoring)
+                    slot      = score_hand(rotation.hand, prev_card, state.phase,
+                                           lane_p, game_time, troops)
                     card_name = rotation.card_at(slot)
                     ctype     = card_type(card_name)
                     phase_str = "early" if game_time < 90 else "double"
 
                     pos = get_play_position(card_name, state.phase, lane_p,
-                                            game_time, w, h)
+                                            game_time, w, h, troops)
 
                     if pos is None:
-                        # Spell held — log it and start timing the wait
                         self.log(f"⏭️ Hold {card_name} ({ctype}): no valid target")
-                        replay.log_wait("held_spell", 0)
+                        replay.log_wait("held_spell", 0, state.phase)
                     else:
                         tx, ty, tile_name = pos
                         cx, cy = card_positions[slot]
@@ -863,7 +1181,8 @@ class RoyaleBot:
 
                         prev_card     = card_name
                         last_play_t   = time.time()
-                        play_cooldown = human_play_interval()
+                        learned_wait  = WAIT_DB.sample_wait(state.phase)
+                        play_cooldown = learned_wait if learned_wait else human_play_interval()
                         cards_played += 1
 
                         self.log(
@@ -873,7 +1192,6 @@ class RoyaleBot:
                             f"elixir={elixir} phase={state.phase}"
                         )
                 else:
-                    # Not playing this tick — start wait timer if not already running
                     if _wait_start is None:
                         _wait_start = time.time()
 
@@ -883,20 +1201,34 @@ class RoyaleBot:
                 self.log(f"Battle error: {e}")
                 time.sleep(1)
 
-        # Feed this battle's placements into the local placement DB
-        won = result == "win"
+        won  = result == "win"
+        arch = archetype.archetype
+
+        # Feed placements into PlacementDB
         for p in replay.placements:
-            PLACEMENT_DB.record(
-                p["card_name"], p["battle_phase"], p["lane"],
-                p["x_norm"],    p["y_norm"],        won,
-            )
+            PLACEMENT_DB.record(p["card_name"], p["battle_phase"], p["lane"],
+                                p["x_norm"], p["y_norm"], won)
         PLACEMENT_DB.save()
+
+        # Feed card sequences into ComboTracker
+        prev = ""
+        for p in replay.placements:
+            if prev:
+                COMBO_DB.record(prev, p["card_name"], p["battle_phase"], won)
+            prev = p["card_name"]
+        COMBO_DB.save()
+
+        # Feed wait events into WaitDB
+        WAIT_DB.record_battle(replay.wait_events)
+        WAIT_DB.save()
+
         db_summary = PLACEMENT_DB.summary()
         if db_summary:
-            self.log(f"📊 PlacementDB: {len(db_summary)} keys with ≥{PlacementDB.MIN_SAMPLES} samples")
+            self.log(f"📊 PlacementDB: {len(db_summary)} keys learned  "
+                     f"| arch={arch}")
 
-        replay.save_local(result, reward.events)
-        ok = replay.send_to_worker(result, reward.events)
+        replay.save_local(result, reward.events, arch)
+        ok = replay.send_to_worker(result, reward.events, arch)
         self.log(
             f"{'✅' if ok else '⚠️'} Replay synced "
             f"({len(replay.placements)} placements, "
