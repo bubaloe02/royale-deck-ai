@@ -371,12 +371,21 @@ class RoyaleBot:
         time.sleep(2)
 
     def dismiss_result(self):
+        """
+        Tap through all post-battle screens:
+          result banner → chest popup → optional offer → home screen
+        OK button sits at ~87% height, centered.
+        We tap 6 times with short pauses to clear every screen that can appear.
+        """
         w, h = self.screen_w, self.screen_h
-        time.sleep(2)
-        tap(int(w * 0.50), int(h * 0.60))
-        time.sleep(1)
-        tap(int(w * 0.50), int(h * 0.65))
-        time.sleep(2)
+        ok_x = int(w * 0.50)
+        ok_y = int(h * 0.87)
+
+        time.sleep(2)  # wait for result animation to finish
+        for i in range(6):
+            tap(ok_x, ok_y)
+            time.sleep(1.2)
+            self.log(f"👆 Dismiss tap {i+1}/6")
 
     def play_battle(self):
         replay = ReplayLogger(self.screen_w, self.screen_h)
