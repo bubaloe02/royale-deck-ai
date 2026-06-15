@@ -276,7 +276,7 @@ def _tile(name, w, h):
     y = int(py * h) + jy
     x = max(int(ARENA_X_MIN * w), min(int(ARENA_X_MAX * w), x))
     y = max(int(ARENA_Y_MIN * h), min(int(ARENA_Y_MAX * h), y))
-    return x, y
+    return x, y, name   # (px, py, tile_name)
 
 def place_troop(card_name, phase, lane: LanePressureTracker, w, h):
     """Bridge pressure during attack; defend hot lane when threatened."""
@@ -328,10 +328,19 @@ def place_spell(card_name, phase, lane: LanePressureTracker, game_time, w, h):
 
 def get_play_position(card_name, phase, lane_pressure, game_time, w, h):
     """
-    Dispatch to card-type-specific handler.
-    Returns (x, y) or None (meaning: don't play this card right now).
+    Returns (x, y, tile_name) or None (meaning: hold this card).
+    Tries PLACEMENT_DB learned distribution first; falls back to heuristics.
     """
+    lane  = lane_pressure.hot_lane or "center"
     ctype = card_type(card_name)
+
+    learned = PLACEMENT_DB.sample_placement(card_name, phase, lane)
+    if learned:
+        x_n, y_n = learned
+        if DEBUG:
+            print(f"  [DB] {card_name} → learned ({x_n:.3f},{y_n:.3f})")
+        return int(x_n * w), int(y_n * h), "learned"
+
     if ctype == "troop":
         return place_troop(card_name, phase, lane_pressure, w, h)
     elif ctype == "building":
@@ -339,6 +348,64 @@ def get_play_position(card_name, phase, lane_pressure, game_time, w, h):
     elif ctype == "spell":
         return place_spell(card_name, phase, lane_pressure, game_time, w, h)
     return place_troop(card_name, phase, lane_pressure, w, h)
+
+# ─── PLACEMENT DATABASE ───────────────────────────────────────────────────────
+
+class PlacementDB:
+    """
+    Accumulates win-weighted (card, phase, lane) → [(x, y, won)] across battles.
+    Once MIN_SAMPLES entries exist for a key, sample_placement() replaces heuristics.
+    Persists as JSON at REPLAY_DIR/placement_db.json.
+    """
+    MIN_SAMPLES = 20
+
+    def __init__(self):
+        self._data = {}   # key → [[x_norm, y_norm, won_int], ...]
+        self._path = os.path.join(REPLAY_DIR, "placement_db.json")
+        self._load()
+
+    def _load(self):
+        try:
+            with open(self._path) as f:
+                self._data = json.load(f)
+            total = sum(len(v) for v in self._data.values())
+            print(f"[PlacementDB] Loaded {total} entries across {len(self._data)} keys")
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            print(f"[PlacementDB] Load error: {e}")
+
+    def save(self):
+        os.makedirs(REPLAY_DIR, exist_ok=True)
+        with open(self._path, "w") as f:
+            json.dump(self._data, f)
+
+    def record(self, card, phase, lane, x_norm, y_norm, won):
+        key = f"{card}|{phase}|{lane}"
+        if key not in self._data:
+            self._data[key] = []
+        self._data[key].append([round(x_norm, 3), round(y_norm, 3), int(won)])
+
+    def sample_placement(self, card, phase, lane):
+        """
+        Win-weighted sample from historical placements.
+        Won placements get 2× weight over losses.
+        Returns (x_norm, y_norm) or None when data is insufficient.
+        """
+        key     = f"{card}|{phase}|{lane}"
+        entries = self._data.get(key, [])
+        if len(entries) < self.MIN_SAMPLES:
+            return None
+        weights = [2 if e[2] else 1 for e in entries]
+        e = random.choices(entries, weights=weights, k=1)[0]
+        return e[0], e[1]
+
+    def summary(self):
+        """Return {key: sample_count} for keys that have reached MIN_SAMPLES."""
+        return {k: len(v) for k, v in self._data.items()
+                if len(v) >= self.MIN_SAMPLES}
+
+PLACEMENT_DB = PlacementDB()
 
 # ─── ADB CONTROLLER ──────────────────────────────────────────────────────────
 
@@ -554,6 +621,7 @@ class ReplayLogger:
         self.our_deck   = list(deck)          # all 8 cards in cycle order
         self.placements        = []
         self.tower_hp_timeline = []
+        self.wait_events       = []
         self._start_time      = time.time()
         self._last_hp_sample  = -self.HP_SAMPLE_INTERVAL
 
@@ -570,24 +638,36 @@ class ReplayLogger:
         return hp
 
     def log_placement(self, card_slot, card_name, tx, ty,
-                      elixir, phase, battle_phase):
+                      elixir, phase, battle_phase,
+                      tile_name="", prev_card="", opponent_cards_seen=None):
         x_norm = round(tx / self.screen_w, 3)
         y_norm = round(ty / self.screen_h, 3)
         entry = {
-            "card_slot":    card_slot,
-            "card_name":    card_name,
-            "card_type":    card_type(card_name),
-            "game_time_ms": self.elapsed_ms(),
-            "x_norm":       x_norm,
-            "y_norm":       y_norm,
-            "lane":         classify_lane(x_norm),
-            "side":         "ours",
-            "elixir":       elixir,
-            "phase":        phase,
-            "battle_phase": battle_phase,
+            "card_slot":           card_slot,
+            "card_name":           card_name,
+            "card_type":           card_type(card_name),
+            "game_time_ms":        self.elapsed_ms(),
+            "x_norm":              x_norm,
+            "y_norm":              y_norm,
+            "lane":                classify_lane(x_norm),
+            "tile_name":           tile_name,
+            "side":                "ours",
+            "elixir":              elixir,
+            "phase":               phase,
+            "battle_phase":        battle_phase,
+            "prev_card":           prev_card,
+            "opponent_cards_seen": opponent_cards_seen or [],
         }
         self.placements.append(entry)
         return entry
+
+    def log_wait(self, reason, duration_ms):
+        """Record a hold decision — used to learn human waiting behaviour."""
+        self.wait_events.append({
+            "game_time_ms": self.elapsed_ms(),
+            "reason":       reason,
+            "duration_ms":  duration_ms,
+        })
 
     def to_dict(self, result="unknown", reward_events=None):
         return {
@@ -599,6 +679,7 @@ class ReplayLogger:
             "our_deck":          self.our_deck,
             "placements":        self.placements,
             "tower_hp_timeline": self.tower_hp_timeline,
+            "wait_events":       self.wait_events,
             "reward_events":     reward_events or [],
         }
 
@@ -698,6 +779,8 @@ class RoyaleBot:
         cards_played = 0
         play_cooldown = human_play_interval()
         prev_hp      = {}
+        prev_card    = ""       # last card played (for sequence logging)
+        _wait_start  = None     # tracks when a wait period began
 
         while time.time() - battle_start < 250:
             if not self.running:
@@ -739,6 +822,11 @@ class RoyaleBot:
                 skip_rand   = (not DEBUG_FORCE_PLAY) and random.random() < 0.20
 
                 if cooldown_ok and elixir_ok and not skip_rand:
+                    # Flush any wait period that just ended
+                    if _wait_start is not None:
+                        replay.log_wait("cooldown", int((time.time() - _wait_start) * 1000))
+                        _wait_start = None
+
                     slot      = cards_played % 4
                     card_name = rotation.card_at(slot)
                     ctype     = card_type(card_name)
@@ -748,19 +836,23 @@ class RoyaleBot:
                                             game_time, w, h)
 
                     if pos is None:
+                        # Spell held — log it and start timing the wait
                         self.log(f"⏭️ Hold {card_name} ({ctype}): no valid target")
+                        replay.log_wait("held_spell", 0)
                     else:
-                        tx, ty = pos
+                        tx, ty, tile_name = pos
                         cx, cy = card_positions[slot]
 
                         hp_before = dict(hp)
                         drag(cx, cy, tx, ty, duration_ms=150)
                         rotation.play(slot)
 
-                        x_n = round(tx / w, 3)
+                        x_n   = round(tx / w, 3)
                         entry = replay.log_placement(
                             slot, card_name, tx, ty,
-                            elixir, phase_str, state.phase
+                            elixir, phase_str, state.phase,
+                            tile_name=tile_name,
+                            prev_card=prev_card,
                         )
 
                         # Collect reward data after a short settle window
@@ -769,22 +861,39 @@ class RoyaleBot:
                         hp_after = sample_tower_hp(scr2)
                         reward.record(entry, hp_before, hp_after, elixir)
 
+                        prev_card     = card_name
                         last_play_t   = time.time()
                         play_cooldown = human_play_interval()
                         cards_played += 1
 
                         self.log(
-                            f"🃏 {card_name} [{ctype}] "
+                            f"🃏 {card_name} [{ctype}] tile={tile_name} "
                             f"({cx},{cy})→({tx},{ty}) "
                             f"lane={classify_lane(x_n)} "
                             f"elixir={elixir} phase={state.phase}"
                         )
+                else:
+                    # Not playing this tick — start wait timer if not already running
+                    if _wait_start is None:
+                        _wait_start = time.time()
 
                 time.sleep(random.uniform(0.3, 0.7))
 
             except Exception as e:
                 self.log(f"Battle error: {e}")
                 time.sleep(1)
+
+        # Feed this battle's placements into the local placement DB
+        won = result == "win"
+        for p in replay.placements:
+            PLACEMENT_DB.record(
+                p["card_name"], p["battle_phase"], p["lane"],
+                p["x_norm"],    p["y_norm"],        won,
+            )
+        PLACEMENT_DB.save()
+        db_summary = PLACEMENT_DB.summary()
+        if db_summary:
+            self.log(f"📊 PlacementDB: {len(db_summary)} keys with ≥{PlacementDB.MIN_SAMPLES} samples")
 
         replay.save_local(result, reward.events)
         ok = replay.send_to_worker(result, reward.events)
