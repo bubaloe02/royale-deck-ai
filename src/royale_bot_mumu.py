@@ -18,87 +18,306 @@ DEVICE       = "127.0.0.1:7555"
 REPLAY_DIR   = r"C:\royale_replays"
 
 # ─── DEBUG FLAGS ─────────────────────────────────────────────────────────────
-DEBUG             = True   # verbose logging
-DEBUG_FORCE_PLAY  = True   # ignore elixir/cooldown, always play
-DEBUG_NO_JITTER   = True   # disable tap jitter
-DEBUG_SAVE_COORDS = True   # write coord overlay on first battle
-BATTLE_DEBOUNCE   = 2      # consecutive frames needed to confirm battle
+DEBUG             = True
+DEBUG_FORCE_PLAY  = True
+DEBUG_NO_JITTER   = True
+DEBUG_SAVE_COORDS = True
+BATTLE_DEBOUNCE   = 2
+
+# ─── DECK CONFIG ─────────────────────────────────────────────────────────────
+# Your 8-card deck in cycle order (slot 0-3 = starting hand).
+# Replace with your actual cards — used for rotation tracking + dispatch.
+MY_DECK = [
+    "slot_0",   # starting hand slot 0  ← replace: e.g. "Hog Rider"
+    "slot_1",   # starting hand slot 1
+    "slot_2",   # starting hand slot 2
+    "slot_3",   # starting hand slot 3
+    "slot_4",   # 5th card (drawn after slot 0 played)
+    "slot_5",
+    "slot_6",
+    "slot_7",
+]
 
 # ─── CARD TYPE REGISTRY ──────────────────────────────────────────────────────
-# Map card name → type. Expand this as you identify your deck.
-# Until template matching lands, slots map to "slot_0".."slot_3" (type "troop").
 CARD_TYPES = {
-    # Troops
-    "Knight":           "troop",
-    "Hog Rider":        "troop",
-    "Musketeer":        "troop",
-    "Mini P.E.K.K.A":  "troop",
-    "Valkyrie":         "troop",
-    "Baby Dragon":      "troop",
-    "Mega Minion":      "troop",
-    "Prince":           "troop",
-    "Giant":            "troop",
-    "Goblin Gang":      "troop",
-    "Skeleton Army":    "troop",
-    # Buildings
-    "Tesla":            "building",
-    "Cannon":           "building",
-    "Inferno Tower":    "building",
-    "Bomb Tower":       "building",
-    "X-Bow":            "building",
-    "Mortar":           "building",
-    # Spells
-    "Fireball":         "spell",
-    "Arrows":           "spell",
-    "Zap":              "spell",
-    "Lightning":        "spell",
-    "Rocket":           "spell",
-    "Goblin Barrel":    "spell",
-    "Freeze":           "spell",
-    "Poison":           "spell",
+    "Knight": "troop", "Hog Rider": "troop", "Musketeer": "troop",
+    "Mini P.E.K.K.A": "troop", "Valkyrie": "troop", "Baby Dragon": "troop",
+    "Mega Minion": "troop", "Prince": "troop", "Giant": "troop",
+    "Goblin Gang": "troop", "Skeleton Army": "troop", "Ice Spirit": "troop",
+    "Goblin": "troop", "Archer": "troop", "Minion Horde": "troop",
+    "Electro Wizard": "troop", "Witch": "troop", "Lumberjack": "troop",
+    "Tesla": "building", "Cannon": "building", "Inferno Tower": "building",
+    "Bomb Tower": "building", "X-Bow": "building", "Mortar": "building",
+    "Fireball": "spell", "Arrows": "spell", "Zap": "spell",
+    "Lightning": "spell", "Rocket": "spell", "Goblin Barrel": "spell",
+    "Freeze": "spell", "Poison": "spell", "Log": "spell",
 }
 
 def card_type(card_name):
-    """Return type for a card name, defaulting to 'troop' for unknown cards."""
     return CARD_TYPES.get(card_name, "troop")
 
-# ─── NAMED TILE COORDINATES (proportional) ───────────────────────────────────
-# All positions are (x_frac, y_frac) of screen size.
-# y < 0.50 = opponent territory, y > 0.50 = player territory.
+# ─── NAMED TILE MAP ──────────────────────────────────────────────────────────
+# (x_frac, y_frac); y < 0.50 = opponent territory, y > 0.50 = own territory
 TILES = {
-    # Bridge pressure — just past the river
     "bridge_left":      (0.22, 0.54),
     "bridge_right":     (0.78, 0.54),
     "bridge_center":    (0.50, 0.54),
-    # Support — slightly behind bridge
     "support_left":     (0.22, 0.63),
     "support_right":    (0.78, 0.63),
     "support_center":   (0.50, 0.63),
-    # Defensive buildings — deep own side
     "defense_left":     (0.22, 0.74),
     "defense_right":    (0.78, 0.74),
     "defense_center":   (0.50, 0.72),
-    # Push tiles — enemy territory, double-elixir aggression
     "push_left":        (0.22, 0.44),
     "push_right":       (0.78, 0.44),
     "push_center":      (0.50, 0.44),
-    # Spell targets — mid-to-enemy territory
     "spell_left":       (0.22, 0.42),
     "spell_right":      (0.78, 0.42),
     "spell_center":     (0.50, 0.42),
-    # King tower activation
+    "anti_hog_left":    (0.20, 0.72),
+    "anti_hog_right":   (0.80, 0.72),
     "king_activate":    (0.50, 0.80),
+    "safe_building_l":  (0.18, 0.76),
+    "safe_building_r":  (0.82, 0.76),
 }
-
-TROOP_TILES_EARLY = ["bridge_left", "bridge_right", "bridge_center",
-                     "support_left", "support_right"]
-TROOP_TILES_LATE  = ["bridge_left", "bridge_right", "push_left", "push_right",
-                     "bridge_center"]
-BUILDING_TILES    = ["defense_left", "defense_right", "defense_center"]
-SPELL_TILES       = ["spell_left", "spell_right", "spell_center"]
 
 ARENA_X_MIN, ARENA_X_MAX = 0.05, 0.95
 ARENA_Y_MIN, ARENA_Y_MAX = 0.15, 0.80
+
+# ─── BATTLE PHASES ───────────────────────────────────────────────────────────
+PHASE_OPENING    = "opening"     # 0 – 30 s
+PHASE_MID        = "mid"         # 30 – 90 s
+PHASE_DOUBLE     = "double"      # 90 – 120 s
+PHASE_OVERTIME   = "overtime"    # 120 s +
+PHASE_DEFENDING  = "defending"   # triggered by enemy push
+PHASE_COUNTERPUSH = "counterpush" # triggered after successful defense
+
+# ─── HUMAN TIMING MODEL (#13) ────────────────────────────────────────────────
+# Sampled from replay data of human play intervals.
+# Until enough replays are collected these are reasonable approximations.
+_TIMING_INTERVALS = [0.4, 0.8, 1.2, 1.5, 2.0, 2.5, 3.0, 3.5, 4.5, 6.0]
+_TIMING_WEIGHTS   = [0.04, 0.10, 0.18, 0.22, 0.20, 0.12, 0.07, 0.04, 0.02, 0.01]
+
+def human_play_interval():
+    """Return a play-cooldown drawn from a human-like timing distribution."""
+    return random.choices(_TIMING_INTERVALS, weights=_TIMING_WEIGHTS, k=1)[0]
+
+# ─── ENEMY ELIXIR TRACKER (#2) ───────────────────────────────────────────────
+class EnemyElixirTracker:
+    """
+    Rule-based estimate of opponent's current elixir.
+    Regenerates at 1 per 2.8 s (normal) or 1 per 1.4 s (double-elixir).
+    Call .update(is_double) every loop. Call .spent(cost) when a card is detected.
+    """
+    REGEN_NORMAL = 2.8
+    REGEN_DOUBLE = 1.4
+
+    def __init__(self):
+        self.estimate  = 5.0
+        self._last_t   = time.time()
+
+    def update(self, is_double=False):
+        now     = time.time()
+        elapsed = now - self._last_t
+        rate    = self.REGEN_DOUBLE if is_double else self.REGEN_NORMAL
+        self.estimate = min(10.0, self.estimate + elapsed / rate)
+        self._last_t  = now
+
+    def spent(self, cost):
+        """Call when we observe the opponent playing a card of known cost."""
+        self.estimate = max(0.0, self.estimate - cost)
+
+    @property
+    def is_low(self):
+        return self.estimate < 4
+
+    @property
+    def is_high(self):
+        return self.estimate >= 7
+
+# ─── CARD ROTATION TRACKER (#3) ──────────────────────────────────────────────
+class CardRotation:
+    """
+    Tracks which card is in each of the 4 hand slots across the 8-card cycle.
+    When a slot is played, the next card from the cycle enters that slot.
+
+    With template matching: card names are real.
+    Without it: slot_0..slot_7 are used as placeholders.
+    """
+    def __init__(self, deck=None):
+        if deck is None:
+            deck = MY_DECK
+        self.deck       = list(deck)
+        self.hand       = list(deck[:4])
+        self._cycle_pos = 4   # next card to draw from deck
+
+    def play(self, slot):
+        """Mark slot as played; pull next card from cycle into it."""
+        played = self.hand[slot]
+        next_card = self.deck[self._cycle_pos % len(self.deck)]
+        self._cycle_pos += 1
+        self.hand[slot] = next_card
+        return played
+
+    def card_at(self, slot):
+        return self.hand[slot]
+
+# ─── LANE PRESSURE TRACKER (#5) ──────────────────────────────────────────────
+class LanePressureTracker:
+    """
+    Scores 0-100 danger on each lane, based on tower HP rate of change.
+    A lane whose tower is losing HP quickly is under threat.
+    """
+    def __init__(self):
+        self.left  = 0.0
+        self.right = 0.0
+        self._prev_hp = {}
+        self._last_t  = time.time()
+
+    def update(self, tower_hp: dict):
+        now     = time.time()
+        elapsed = max(0.1, now - self._last_t)
+
+        def delta(key):
+            prev = self._prev_hp.get(key, tower_hp.get(key, 100))
+            curr = tower_hp.get(key, 100)
+            return max(0.0, (prev - curr) / elapsed)   # HP lost per second
+
+        left_threat  = delta("our_left")  * 8
+        right_threat = delta("our_right") * 8
+
+        # Exponential decay + new threat
+        decay = max(0.0, 1.0 - elapsed * 0.15)
+        self.left  = min(100.0, self.left  * decay + left_threat)
+        self.right = min(100.0, self.right * decay + right_threat)
+
+        self._prev_hp = dict(tower_hp)
+        self._last_t  = now
+
+    @property
+    def hot_lane(self):
+        if self.left > 20 or self.right > 20:
+            return "left" if self.left >= self.right else "right"
+        return None
+
+    @property
+    def under_attack(self):
+        return self.left > 30 or self.right > 30
+
+# ─── BATTLE STATE MACHINE (#1) ───────────────────────────────────────────────
+class BattleStateMachine:
+    """
+    Drives battle phase transitions.
+    Phases affect tile pool selection and spell targeting.
+    """
+    def __init__(self):
+        self.phase      = PHASE_OPENING
+        self._defend_t  = None
+
+    def update(self, game_time, lane_pressure: LanePressureTracker):
+        # Time-based baseline
+        if game_time < 30:
+            base = PHASE_OPENING
+        elif game_time < 90:
+            base = PHASE_MID
+        elif game_time < 120:
+            base = PHASE_DOUBLE
+        else:
+            base = PHASE_OVERTIME
+
+        # Override: switch to defending if lane under attack
+        if lane_pressure.under_attack:
+            if self.phase != PHASE_DEFENDING:
+                self._defend_t = time.time()
+            self.phase = PHASE_DEFENDING
+            return
+
+        # Counterpush window: 8 s after danger subsides
+        if self.phase == PHASE_DEFENDING and self._defend_t:
+            if time.time() - self._defend_t < 8:
+                self.phase = PHASE_COUNTERPUSH
+                return
+            self._defend_t = None
+
+        self.phase = base
+
+    @property
+    def is_double(self):
+        return self.phase in (PHASE_DOUBLE, PHASE_OVERTIME)
+
+# ─── CARD-SPECIFIC PLACEMENT HANDLERS (#8) ───────────────────────────────────
+
+def _tile(name, w, h):
+    px, py = TILES[name]
+    jx = 0 if DEBUG_NO_JITTER else random.randint(-10, 10)
+    jy = 0 if DEBUG_NO_JITTER else random.randint(-8,   8)
+    x = int(px * w) + jx
+    y = int(py * h) + jy
+    x = max(int(ARENA_X_MIN * w), min(int(ARENA_X_MAX * w), x))
+    y = max(int(ARENA_Y_MIN * h), min(int(ARENA_Y_MAX * h), y))
+    return x, y
+
+def place_troop(card_name, phase, lane: LanePressureTracker, w, h):
+    """Bridge pressure during attack; defend hot lane when threatened."""
+    if phase == PHASE_DEFENDING and lane.hot_lane:
+        pool = (["defense_left", "support_left"] if lane.hot_lane == "left"
+                else ["defense_right", "support_right"])
+    elif phase == PHASE_COUNTERPUSH and lane.hot_lane:
+        pool = (["bridge_left", "push_left"] if lane.hot_lane == "left"
+                else ["bridge_right", "push_right"])
+    elif phase in (PHASE_DOUBLE, PHASE_OVERTIME):
+        pool = ["push_left", "push_right", "bridge_left", "bridge_right",
+                "bridge_center"]
+    elif phase == PHASE_MID:
+        pool = ["bridge_left", "bridge_right", "bridge_center",
+                "support_left", "support_right"]
+    else:  # opening
+        pool = ["support_left", "support_right", "support_center",
+                "bridge_left", "bridge_right"]
+    return _tile(random.choice(pool), w, h)
+
+def place_building(card_name, phase, lane: LanePressureTracker, w, h):
+    """Buildings go on defensive tiles; mirror hot lane if under attack."""
+    if lane.hot_lane == "left":
+        pool = ["anti_hog_left", "defense_left", "safe_building_l"]
+    elif lane.hot_lane == "right":
+        pool = ["anti_hog_right", "defense_right", "safe_building_r"]
+    else:
+        pool = ["defense_left", "defense_right", "defense_center",
+                "safe_building_l", "safe_building_r"]
+    return _tile(random.choice(pool), w, h)
+
+def place_spell(card_name, phase, lane: LanePressureTracker, game_time, w, h):
+    """
+    Spells target enemy territory, preferring the hot lane.
+    Skip entirely if game is too early and there's no meaningful target.
+    Returns None if spell should be held.
+    """
+    if game_time < 20:
+        return None   # no clump yet — don't waste it
+
+    if lane.hot_lane == "left":
+        pool = ["spell_left", "push_left"]
+    elif lane.hot_lane == "right":
+        pool = ["spell_right", "push_right"]
+    else:
+        pool = ["spell_left", "spell_right", "spell_center"]
+
+    return _tile(random.choice(pool), w, h)
+
+def get_play_position(card_name, phase, lane_pressure, game_time, w, h):
+    """
+    Dispatch to card-type-specific handler.
+    Returns (x, y) or None (meaning: don't play this card right now).
+    """
+    ctype = card_type(card_name)
+    if ctype == "troop":
+        return place_troop(card_name, phase, lane_pressure, w, h)
+    elif ctype == "building":
+        return place_building(card_name, phase, lane_pressure, w, h)
+    elif ctype == "spell":
+        return place_spell(card_name, phase, lane_pressure, game_time, w, h)
+    return place_troop(card_name, phase, lane_pressure, w, h)
 
 # ─── ADB CONTROLLER ──────────────────────────────────────────────────────────
 
@@ -114,7 +333,6 @@ def tap(x, y):
     time.sleep(random.uniform(0.05, 0.15))
 
 def drag(x1, y1, x2, y2, duration_ms=150):
-    """Swipe from card slot to arena position."""
     jx, jy = _jitter()
     adb_cmd([
         "shell", "input", "swipe",
@@ -122,7 +340,7 @@ def drag(x1, y1, x2, y2, duration_ms=150):
         str(x2), str(y2),
         str(duration_ms),
     ])
-    time.sleep(random.uniform(0.1, 0.2))
+    time.sleep(random.uniform(0.08, 0.18))
 
 def screenshot():
     result = adb_cmd(["exec-out", "screencap", "-p"])
@@ -138,71 +356,26 @@ def save_screenshot(path=r"C:\debug_screen.png"):
 def key_event(keycode):
     adb_cmd(["shell", "input", "keyevent", str(keycode)])
 
-# ─── PLACEMENT LOGIC ─────────────────────────────────────────────────────────
-
-def get_tile_pos(tile_name, w, h):
-    """Resolve a named tile to pixel coordinates, clamped to arena bounds."""
-    px, py = TILES[tile_name]
-    jx = 0 if DEBUG_NO_JITTER else random.randint(-10, 10)
-    jy = 0 if DEBUG_NO_JITTER else random.randint(-8, 8)
-    x = int(px * w) + jx
-    y = int(py * h) + jy
-    x = max(int(ARENA_X_MIN * w), min(int(ARENA_X_MAX * w), x))
-    y = max(int(ARENA_Y_MIN * h), min(int(ARENA_Y_MAX * h), y))
-    return x, y
-
-def get_play_position(card_name, game_time, w, h):
-    """
-    Dispatch to the right tile pool based on card type and game phase.
-    Returns (x, y) or None if there is no valid target (e.g. spell too early).
-    """
-    ctype = card_type(card_name)
-    late  = game_time >= 90
-
-    if ctype == "troop":
-        pool = TROOP_TILES_LATE if late else TROOP_TILES_EARLY
-    elif ctype == "building":
-        pool = BUILDING_TILES
-    elif ctype == "spell":
-        # Don't waste spells in the first 20 s — no valid clump yet
-        if game_time < 20:
-            return None
-        pool = SPELL_TILES
-    else:
-        pool = TROOP_TILES_EARLY
-
-    return get_tile_pos(random.choice(pool), w, h)
-
-def should_play(elixir, last_play_time, cards_played):
-    if DEBUG_FORCE_PLAY:
-        return True, cards_played % 4
-    if elixir < 4:
-        return False, None
-    if time.time() - last_play_time < 2.0:
-        return False, None
-    if random.random() < 0.25:
-        return False, None
-    return True, cards_played % 4
-
 # ─── DEBUG: coordinate overlay ───────────────────────────────────────────────
 
-def save_coord_overlay(screen, card_positions, play_samples, path=r"C:\debug_coords.png"):
+def save_coord_overlay(screen, card_positions, path=r"C:\debug_coords.png"):
     img = screen.copy()
+    h, w = img.shape[:2]
     for idx, (cx, cy) in card_positions.items():
         cv2.circle(img, (cx, cy), 18, (0, 255, 0), 3)
         cv2.putText(img, f"C{idx}", (cx - 12, cy - 22),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-    for label, (px, py) in play_samples:
-        cv2.circle(img, (px, py), 12, (0, 0, 255), 2)
-        cv2.putText(img, label[:4], (px - 14, py + 6),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1)
+    for name, (px, py) in TILES.items():
+        tx, ty = int(px * w), int(py * h)
+        cv2.circle(img, (tx, ty), 8, (0, 0, 255), 2)
+        cv2.putText(img, name[:8], (tx - 20, ty - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 200, 255), 1)
     cv2.imwrite(path, img)
     print(f"Coord overlay saved to {path}")
 
 # ─── SCREEN DETECTION ────────────────────────────────────────────────────────
 
 def is_on_home_screen(screen):
-    """Battle button: golden-yellow band in lower-center of screen."""
     h, w = screen.shape[:2]
     region = screen[int(h * 0.65):int(h * 0.90), int(w * 0.20):int(w * 0.80)]
     hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
@@ -220,11 +393,6 @@ def is_in_battle(screen):
     return _elixir_purple_count(screen) > 80
 
 def find_ok_button(screen):
-    """
-    Find the blue OK button centroid in the lower-center of the screen.
-    Searches 65-82% height, 25-75% width.
-    Returns (x, y) in full-screen coords or None.
-    """
     h, w = screen.shape[:2]
     y0, y1 = int(h * 0.65), int(h * 0.82)
     x0, x1 = int(w * 0.25), int(w * 0.75)
@@ -236,37 +404,30 @@ def find_ok_button(screen):
     M = cv2.moments(blue)
     if M["m00"] == 0:
         return None
-    cx = int(M["m10"] / M["m00"]) + x0
-    cy = int(M["m01"] / M["m00"]) + y0
-    return cx, cy
+    return (int(M["m10"] / M["m00"]) + x0,
+            int(M["m01"] / M["m00"]) + y0)
 
 def is_battle_ended(screen):
-    """Detect result screen by finding the blue OK button at 65-82% height."""
     return find_ok_button(screen) is not None
 
 def did_win(screen):
     """
-    CR always places WINNER at bottom, LOSER at top.
-    Local player always has a BLUE banner; opponent has RED/PINK.
-    → More blue pixels in bottom band (60-68%) than top (30-38%) = we won.
-
-    TODO: replace with OCR of "WINNER!" or player name matching for
-          higher accuracy once pytesseract is available.
+    CR places WINNER at bottom (blue banner), LOSER at top (red/pink banner).
+    Local player always has blue; opponent has red/pink.
+    TODO: replace with OCR of player name once pytesseract is available.
     """
     h, w = screen.shape[:2]
     bottom = screen[int(h*0.60):int(h*0.68), int(w*0.10):int(w*0.90)]
     top    = screen[int(h*0.30):int(h*0.38), int(w*0.10):int(w*0.90)]
 
-    def blue_px(region):
-        hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+    def blue_px(r):
+        hsv = cv2.cvtColor(r, cv2.COLOR_BGR2HSV)
         return cv2.countNonZero(cv2.inRange(hsv, (100, 100, 80), (130, 255, 255)))
 
-    bottom_blue = blue_px(bottom)
-    top_blue    = blue_px(top)
+    b, t = blue_px(bottom), blue_px(top)
     if DEBUG:
-        print(f"[did_win] bottom_blue={bottom_blue} top_blue={top_blue} "
-              f"→ {'WIN' if bottom_blue > top_blue else 'LOSS'}")
-    return bottom_blue > top_blue
+        print(f"[did_win] bottom_blue={b} top_blue={t} → {'WIN' if b > t else 'LOSS'}")
+    return b > t
 
 def get_elixir(screen):
     return min(10, int(_elixir_purple_count(screen) / 15))
@@ -274,16 +435,16 @@ def get_elixir(screen):
 def is_loading(screen):
     h, w = screen.shape[:2]
     gray = cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY)
-    very_dark = cv2.countNonZero(cv2.threshold(gray, 20, 255, cv2.THRESH_BINARY_INV)[1])
-    return very_dark > (w * h * 0.7)
+    dark = cv2.countNonZero(cv2.threshold(gray, 20, 255, cv2.THRESH_BINARY_INV)[1])
+    return dark > (w * h * 0.7)
 
 def is_matchmaking(screen):
     h, w = screen.shape[:2]
     region = screen[int(h * 0.78):int(h * 0.90), int(w * 0.25):int(w * 0.75)]
     hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
-    red1 = cv2.inRange(hsv, (0,   150, 150), (10,  255, 255))
-    red2 = cv2.inRange(hsv, (170, 150, 150), (180, 255, 255))
-    return cv2.countNonZero(red1) + cv2.countNonZero(red2) > 200
+    r1 = cv2.inRange(hsv, (0,   150, 150), (10,  255, 255))
+    r2 = cv2.inRange(hsv, (170, 150, 150), (180, 255, 255))
+    return cv2.countNonZero(r1) + cv2.countNonZero(r2) > 200
 
 # ─── TOWER HP DETECTION ──────────────────────────────────────────────────────
 
@@ -309,19 +470,16 @@ def _bar_fill_pct(region, colour):
 
 def sample_tower_hp(screen):
     h, w = screen.shape[:2]
-    hp = {}
-    for name, (y0, y1, x0, x1, colour) in _TOWER_REGIONS.items():
-        region = screen[int(h*y0):int(h*y1), int(w*x0):int(w*x1)]
-        hp[name] = _bar_fill_pct(region, colour)
-    return hp
-
-# ─── LANE HELPER ─────────────────────────────────────────────────────────────
+    return {
+        name: _bar_fill_pct(
+            screen[int(h*y0):int(h*y1), int(w*x0):int(w*x1)], colour
+        )
+        for name, (y0, y1, x0, x1, colour) in _TOWER_REGIONS.items()
+    }
 
 def classify_lane(x_norm):
-    if x_norm < 0.40:
-        return "left"
-    if x_norm > 0.60:
-        return "right"
+    if x_norm < 0.40: return "left"
+    if x_norm > 0.60: return "right"
     return "center"
 
 # ─── CARD TAP POSITIONS ──────────────────────────────────────────────────────
@@ -335,6 +493,32 @@ def get_card_tap_positions(w, h):
         3: (int(w * 0.72), y),
     }
 
+# ─── REWARD ENGINE (#10 — data collection, ML training hooks) ────────────────
+class RewardEngine:
+    """
+    Records per-placement outcomes for future ML training.
+    Computes tower-damage delta, elixir spent, and phase context.
+    Future: train a reward model to predict EV of each action (#11).
+    """
+    def __init__(self):
+        self.events = []
+
+    def record(self, placement, hp_before, hp_after, elixir_spent):
+        our_dmg   = (hp_before.get("their_left",  100) - hp_after.get("their_left",  100) +
+                     hp_before.get("their_right", 100) - hp_after.get("their_right", 100) +
+                     hp_before.get("their_king",  100) - hp_after.get("their_king",  100))
+        their_dmg = (hp_before.get("our_left",  100) - hp_after.get("our_left",  100) +
+                     hp_before.get("our_right", 100) - hp_after.get("our_right", 100) +
+                     hp_before.get("our_king",  100) - hp_after.get("our_king",  100))
+        self.events.append({
+            **placement,
+            "our_tower_dmg":   round(our_dmg,   2),
+            "their_tower_dmg": round(their_dmg, 2),
+            "elixir_spent":    elixir_spent,
+            # EV placeholder — will be set by future reward model
+            "ev": None,
+        })
+
 # ─── REPLAY LOGGER ───────────────────────────────────────────────────────────
 
 class ReplayLogger:
@@ -346,7 +530,7 @@ class ReplayLogger:
         self.started_at = ts.isoformat()
         self.screen_w   = screen_w
         self.screen_h   = screen_h
-        self.our_deck   = [f"slot_{i}" for i in range(4)]  # filled once card detection lands
+        self.our_deck   = list(MY_DECK[:4])
         self.placements        = []
         self.tower_hp_timeline = []
         self._start_time      = time.time()
@@ -358,17 +542,19 @@ class ReplayLogger:
     def maybe_sample_hp(self, screen):
         elapsed = time.time() - self._start_time
         if elapsed - self._last_hp_sample < self.HP_SAMPLE_INTERVAL:
-            return
+            return None
         hp = sample_tower_hp(screen)
         self.tower_hp_timeline.append({"game_time_ms": int(elapsed * 1000), **hp})
         self._last_hp_sample = elapsed
+        return hp
 
-    def log_placement(self, card_slot, card_name, tx, ty, elixir, phase):
+    def log_placement(self, card_slot, card_name, tx, ty,
+                      elixir, phase, battle_phase):
         x_norm = round(tx / self.screen_w, 3)
         y_norm = round(ty / self.screen_h, 3)
-        self.placements.append({
+        entry = {
             "card_slot":    card_slot,
-            "card_name":    card_name,   # actual name once template matching ready
+            "card_name":    card_name,
             "card_type":    card_type(card_name),
             "game_time_ms": self.elapsed_ms(),
             "x_norm":       x_norm,
@@ -377,9 +563,12 @@ class ReplayLogger:
             "side":         "ours",
             "elixir":       elixir,
             "phase":        phase,
-        })
+            "battle_phase": battle_phase,
+        }
+        self.placements.append(entry)
+        return entry
 
-    def to_dict(self, result="unknown"):
+    def to_dict(self, result="unknown", reward_events=None):
         return {
             "battle_id":         self.battle_id,
             "started_at":        self.started_at,
@@ -389,20 +578,24 @@ class ReplayLogger:
             "our_deck":          self.our_deck,
             "placements":        self.placements,
             "tower_hp_timeline": self.tower_hp_timeline,
+            "reward_events":     reward_events or [],
         }
 
-    def save_local(self, result="unknown"):
+    def save_local(self, result="unknown", reward_events=None):
         os.makedirs(REPLAY_DIR, exist_ok=True)
         path = os.path.join(REPLAY_DIR, f"{self.battle_id}.json")
         with open(path, "w") as f:
-            json.dump(self.to_dict(result), f, indent=2)
+            json.dump(self.to_dict(result, reward_events), f, indent=2)
         print(f"Replay saved → {path}")
         return path
 
-    def send_to_worker(self, result="unknown"):
+    def send_to_worker(self, result="unknown", reward_events=None):
         try:
-            res = requests.post(f"{WORKER_URL}/bot/battle",
-                                json=self.to_dict(result), timeout=10)
+            res = requests.post(
+                f"{WORKER_URL}/bot/battle",
+                json=self.to_dict(result, reward_events),
+                timeout=10,
+            )
             return res.ok
         except Exception as e:
             print(f"Worker send error: {e}")
@@ -436,11 +629,6 @@ class RoyaleBot:
         time.sleep(2)
 
     def dismiss_result(self):
-        """
-        Tap through post-battle screens (result → chest → offer → home).
-        Each tap locates the blue OK button dynamically; falls back to
-        (50%, 73%) — the position suggested by manual testing.
-        """
         w, h = self.screen_w, self.screen_h
         fallback_x = int(w * 0.50)
         fallback_y = int(h * 0.73)
@@ -458,34 +646,36 @@ class RoyaleBot:
                     self.log(f"👆 Dismiss {i+1}/6 → fallback ({fallback_x},{fallback_y})")
             except Exception as e:
                 tap(fallback_x, fallback_y)
-                self.log(f"👆 Dismiss {i+1}/6 → err fallback ({e})")
+                self.log(f"👆 Dismiss {i+1}/6 → err ({e})")
             time.sleep(1.2)
 
     def play_battle(self):
-        replay = ReplayLogger(self.screen_w, self.screen_h)
+        replay   = ReplayLogger(self.screen_w, self.screen_h)
+        rotation = CardRotation()
+        state    = BattleStateMachine()
+        lane_p   = LanePressureTracker()
+        enemy_ex = EnemyElixirTracker()
+        reward   = RewardEngine()
+
         self.log(f"⚔️ Battle #{self.battles_played + 1} | id={replay.battle_id}")
 
         w, h = self.screen_w, self.screen_h
         card_positions = get_card_tap_positions(w, h)
-        last_play_time = 0
-        cards_played   = 0
-
         self.log(f"🃏 Card slots: {card_positions}")
 
-        # Save coordinate overlay on first battle
         if DEBUG_SAVE_COORDS and not self._coords_saved:
             try:
-                scr0 = screenshot()
-                samples = [(t, get_tile_pos(t, w, h)) for t in
-                           ["bridge_left", "bridge_right", "defense_center",
-                            "spell_center", "push_left", "push_right"]]
-                save_coord_overlay(scr0, card_positions, samples)
+                save_coord_overlay(screenshot(), card_positions)
                 self._coords_saved = True
             except Exception as e:
                 self.log(f"Coord overlay error: {e}")
 
-        result      = "loss"
+        result       = "loss"
         battle_start = time.time()
+        last_play_t  = 0
+        cards_played = 0
+        play_cooldown = human_play_interval()
+        prev_hp      = {}
 
         while time.time() - battle_start < 250:
             if not self.running:
@@ -494,7 +684,6 @@ class RoyaleBot:
                 screen    = screenshot()
                 game_time = time.time() - battle_start
 
-                # Battles cannot end in under 20 s — prevents false triggers
                 if game_time > 20 and is_battle_ended(screen):
                     result = "win" if did_win(screen) else "loss"
                     self.log(f"{'🏆 WIN' if result == 'win' else '💀 LOSS'}!")
@@ -504,54 +693,85 @@ class RoyaleBot:
                     time.sleep(1)
                     continue
 
-                replay.maybe_sample_hp(screen)
+                # HP sampling + systems update
+                hp = replay.maybe_sample_hp(screen) or (
+                    replay.tower_hp_timeline[-1] if replay.tower_hp_timeline else {})
+                lane_p.update(hp)
+                enemy_ex.update(is_double=state.is_double)
+                state.update(game_time, lane_p)
 
                 elixir = get_elixir(screen)
 
                 if DEBUG:
-                    hp = replay.tower_hp_timeline[-1] if replay.tower_hp_timeline else {}
                     self.log(
-                        f"💧 Elixir {elixir}/10  t={int(game_time)}s  "
-                        f"HP our={hp.get('our_king','?')}% their={hp.get('their_king','?')}%"
+                        f"💧 {elixir}/10  t={int(game_time)}s  "
+                        f"phase={state.phase}  "
+                        f"lane L={lane_p.left:.0f} R={lane_p.right:.0f}  "
+                        f"enemy_ex≈{enemy_ex.estimate:.1f}  "
+                        f"hand={rotation.hand}"
                     )
 
-                should, card_idx = should_play(elixir, last_play_time, cards_played)
+                # Decide whether to play
+                cooldown_ok = time.time() - last_play_t >= play_cooldown
+                elixir_ok   = elixir >= 4 or DEBUG_FORCE_PLAY
+                skip_rand   = (not DEBUG_FORCE_PLAY) and random.random() < 0.20
 
-                if should and card_idx is not None:
-                    phase     = "early" if game_time < 90 else "double"
-                    cx, cy    = card_positions[card_idx]
-                    card_name = replay.our_deck[card_idx]  # "slot_X" until detection ready
-                    pos       = get_play_position(card_name, game_time, w, h)
+                if cooldown_ok and elixir_ok and not skip_rand:
+                    slot      = cards_played % 4
+                    card_name = rotation.card_at(slot)
+                    ctype     = card_type(card_name)
+                    phase_str = "early" if game_time < 90 else "double"
+
+                    pos = get_play_position(card_name, state.phase, lane_p,
+                                            game_time, w, h)
 
                     if pos is None:
-                        self.log(f"⏭️ Skip slot={card_idx} ({card_name}): no valid target yet")
-                        continue
+                        self.log(f"⏭️ Hold {card_name} ({ctype}): no valid target")
+                    else:
+                        tx, ty = pos
+                        cx, cy = card_positions[slot]
 
-                    tx, ty = pos
-                    drag(cx, cy, tx, ty, duration_ms=150)
+                        hp_before = dict(hp)
+                        drag(cx, cy, tx, ty, duration_ms=150)
+                        rotation.play(slot)
 
-                    replay.log_placement(card_idx, card_name, tx, ty, elixir, phase)
-                    last_play_time = time.time()
-                    cards_played  += 1
+                        x_n = round(tx / w, 3)
+                        entry = replay.log_placement(
+                            slot, card_name, tx, ty,
+                            elixir, phase_str, state.phase
+                        )
 
-                    x_n = round(tx / w, 3)
-                    self.log(
-                        f"🃏 {card_name} [{card_type(card_name)}] "
-                        f"({cx},{cy})→({tx},{ty}) "
-                        f"lane={classify_lane(x_n)} elixir={elixir} {phase}"
-                    )
+                        # Collect reward data after a short settle window
+                        time.sleep(0.5)
+                        scr2 = screenshot()
+                        hp_after = sample_tower_hp(scr2)
+                        reward.record(entry, hp_before, hp_after, elixir)
 
-                time.sleep(random.uniform(0.4, 0.9))
+                        last_play_t   = time.time()
+                        play_cooldown = human_play_interval()
+                        cards_played += 1
+
+                        self.log(
+                            f"🃏 {card_name} [{ctype}] "
+                            f"({cx},{cy})→({tx},{ty}) "
+                            f"lane={classify_lane(x_n)} "
+                            f"elixir={elixir} phase={state.phase}"
+                        )
+
+                time.sleep(random.uniform(0.3, 0.7))
 
             except Exception as e:
                 self.log(f"Battle error: {e}")
                 time.sleep(1)
 
-        replay.save_local(result)
-        ok = replay.send_to_worker(result)
-        self.log(f"{'✅' if ok else '⚠️'} Replay synced "
-                 f"({len(replay.placements)} placements, "
-                 f"{len(replay.tower_hp_timeline)} HP snapshots)")
+        replay.save_local(result, reward.events)
+        ok = replay.send_to_worker(result, reward.events)
+        self.log(
+            f"{'✅' if ok else '⚠️'} Replay synced "
+            f"({len(replay.placements)} placements, "
+            f"{len(replay.tower_hp_timeline)} HP snapshots, "
+            f"{len(reward.events)} reward events)"
+        )
 
         if result == "win":
             self.wins += 1
@@ -631,10 +851,8 @@ try:
         def __init__(self):
             self.bot    = None
             self.thread = None
-
             ctk.set_appearance_mode("dark")
             ctk.set_default_color_theme("dark-blue")
-
             self.root = ctk.CTk()
             self.root.title("👑 RoyaleBot AI")
             self.root.geometry("500x640")
@@ -644,8 +862,9 @@ try:
             header.pack(fill="x")
             ctk.CTkLabel(header, text="👑 ROYALE BOT AI",
                 font=("Arial", 24, "bold"), text_color="#ff6f00").pack(pady=10)
-            ctk.CTkLabel(header, text="MuMu Player · Port 7555 · Replay logging active",
-                font=("Arial", 11), text_color="#333").pack(pady=2)
+            ctk.CTkLabel(header,
+                text="State machine · Lane pressure · Human timing · Replay logging",
+                font=("Arial", 10), text_color="#333").pack(pady=2)
 
             sf = ctk.CTkFrame(self.root, fg_color="#111122")
             sf.pack(fill="x", padx=20, pady=10)
@@ -698,7 +917,7 @@ try:
                 command=self.stop, height=45, state="disabled")
             self.stop_btn.grid(row=0, column=1, padx=5, sticky="ew")
 
-            ctk.CTkButton(self.root, text="📸 Debug Screenshot → C:\\debug_screen.png",
+            ctk.CTkButton(self.root, text="📸 Debug Screenshot",
                 font=("Arial", 11), fg_color="#1a1a2e", hover_color="#222244",
                 command=self.take_screenshot, height=32).pack(pady=5, padx=20, fill="x")
 
