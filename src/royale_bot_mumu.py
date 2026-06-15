@@ -98,18 +98,36 @@ def is_in_battle(screen):
     return _elixir_purple_count(screen) > 80
 
 def is_battle_ended(screen):
+    """
+    Detect post-battle result screen by finding the blue OK button
+    at bottom-center (~83-92% height, 30-70% width).
+    Much more reliable than a bright-pixel count on a dark background.
+    """
     h, w = screen.shape[:2]
-    region = screen[int(h * 0.20):int(h * 0.50), int(w * 0.10):int(w * 0.90)]
-    gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
-    bright = cv2.countNonZero(cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)[1])
-    return bright > region.shape[0] * region.shape[1] * 0.30
+    region = screen[int(h * 0.83):int(h * 0.92), int(w * 0.30):int(w * 0.70)]
+    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+    blue = cv2.inRange(hsv, (100, 150, 150), (130, 255, 255))
+    return cv2.countNonZero(blue) > 200
 
 def did_win(screen):
+    """
+    Result screen layout (portrait):
+      ~28-46% height : opponent section  (their crowns, red/pink banner)
+      ~50-67% height : player section    (our crowns, blue banner)
+    Count gold crown pixels (HSV hue 20-35) in each band.
+    More gold on our side = win.
+    """
     h, w = screen.shape[:2]
-    ours   = screen[int(h*0.02):int(h*0.08), int(w*0.05):int(w*0.40)]
-    theirs = screen[int(h*0.02):int(h*0.08), int(w*0.60):int(w*0.95)]
-    our_g   = cv2.countNonZero(cv2.inRange(ours,   (0, 150, 150), (50, 255, 255)))
-    their_g = cv2.countNonZero(cv2.inRange(theirs, (0, 150, 150), (50, 255, 255)))
+    theirs = screen[int(h*0.28):int(h*0.46), int(w*0.15):int(w*0.85)]
+    ours   = screen[int(h*0.50):int(h*0.67), int(w*0.15):int(w*0.85)]
+
+    def gold(region):
+        hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+        return cv2.countNonZero(cv2.inRange(hsv, (20, 150, 150), (35, 255, 255)))
+
+    our_g, their_g = gold(ours), gold(theirs)
+    if DEBUG:
+        print(f"[did_win] our_gold={our_g} their_gold={their_g}")
     return our_g > their_g
 
 def get_elixir(screen):
