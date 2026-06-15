@@ -172,13 +172,12 @@ _TIMING_INTERVALS = [0.4, 0.8, 1.2, 1.5, 2.0, 2.5, 3.0, 3.5, 4.5, 6.0]
 _TIMING_WEIGHTS   = [0.04, 0.10, 0.18, 0.22, 0.20, 0.12, 0.07, 0.04, 0.02, 0.01]
 
 def human_play_interval(phase=None):
-    """Play-cooldown from human-like distribution, capped by phase."""
     base = random.choices(_TIMING_INTERVALS, weights=_TIMING_WEIGHTS, k=1)[0]
     if phase in (PHASE_DOUBLE, PHASE_OVERTIME):
-        return min(base, 1.5)    # double elixir: max 1.5 s
+        return min(base, 0.8)
     elif phase == PHASE_OPENING:
-        return min(base, 2.5)    # opening: max 2.5 s
-    return min(base, 3.5)        # mid / other: max 3.5 s
+        return min(base, 1.5)
+    return min(base, 2.0)
 
 # ─── ENEMY ELIXIR TRACKER (#2) ───────────────────────────────────────────────
 class EnemyElixirTracker:
@@ -1460,7 +1459,7 @@ class SpellEvaluator:
         if not troops:
             return True
         value   = spell_target_value(card_name, tx / w, ty / h, troops)
-        min_hit = 1 if card_type(card_name) == "spell_big" else 3
+        min_hit = 1 if card_type(card_name) == "spell_big" else 2
         return value >= min_hit
 
 # ─── ACTIONS ─────────────────────────────────────────────────────────────────
@@ -1521,8 +1520,8 @@ class DecisionEngine:
         self.enemy_elixir.update(is_double=gs.is_double)
 
         cooldown_ok = time.time() - self._last_play_t >= self._play_cooldown
-        elixir_ok   = visual.elixir >= 4 or DEBUG_FORCE_PLAY
-        skip_rand   = (not DEBUG_FORCE_PLAY) and random.random() < 0.20
+        elixir_ok   = visual.elixir >= 3 or DEBUG_FORCE_PLAY
+        skip_rand   = (not DEBUG_FORCE_PLAY) and random.random() < 0.10
 
         if not (cooldown_ok and elixir_ok and not skip_rand):
             if self._wait_start is None:
@@ -1790,17 +1789,23 @@ class RoyaleBot:
                 visual = vision.analyze(screen)
                 state  = voter.vote(visual.screen_state)   # flicker-resistant
 
+                # Tap OK immediately on raw detection — don't wait for voter to
+                # commit to RESULT (it takes 3 frames after a reset, causing a
+                # 6-second stall at the end of battle screen).
+                if visual.ok_button and state != ScreenState.BATTLE:
+                    self.log(f"👆 OK at {visual.ok_button}")
+                    tap(*visual.ok_button)
+                    time.sleep(0.8)
+                    continue
+
                 if state == ScreenState.BATTLE:
                     self.play_battle()
                     voter.reset()   # prevent stale BATTLE frames from re-triggering
 
                 elif state == ScreenState.RESULT:
-                    if visual.ok_button:
-                        self.log(f"👆 Dismiss result at {visual.ok_button}")
-                        tap(*visual.ok_button)
-                        time.sleep(0.8)
-                    else:
-                        time.sleep(0.2)
+                    # ok_button tap already handled above; if we reach here
+                    # the button wasn't found this frame — wait and retry.
+                    time.sleep(0.2)
 
                 elif state == ScreenState.HOME:
                     self.log("🏠 Home — tapping Battle")
