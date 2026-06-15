@@ -14,20 +14,36 @@ WORKER_URL = "https://small-king-a65c.jared1999.workers.dev"
 ADB = r"C:\adb\platform-tools\adb.exe"
 DEVICE = "127.0.0.1:7555"
 
+# ─── DEBUG FLAGS (set all True while tuning, False for live play) ─────────────
+DEBUG             = True   # verbose elixir + coordinate logging  (#3)
+DEBUG_FORCE_PLAY  = True   # ignore elixir/cooldown, always play  (#4)
+DEBUG_NO_JITTER   = True   # disable tap jitter                   (#8)
+DEBUG_SAVE_COORDS = True   # write coord overlay on first battle  (#2)
+BATTLE_DEBOUNCE   = 2      # consecutive frames needed to confirm battle (#7)
+
 # ─── ADB CONTROLLER ──────────────────────────────────────────────────────────
 
 def adb_cmd(cmd_list):
-    result = subprocess.run(
-        [ADB, "-s", DEVICE] + cmd_list,
-        capture_output=True
-    )
-    return result
+    return subprocess.run([ADB, "-s", DEVICE] + cmd_list, capture_output=True)
+
+def _jitter():
+    return (0, 0) if DEBUG_NO_JITTER else (random.randint(-3, 3), random.randint(-3, 3))
 
 def tap(x, y):
-    jitter_x = random.randint(-3, 3)
-    jitter_y = random.randint(-3, 3)
-    adb_cmd(["shell", "input", "tap", str(x + jitter_x), str(y + jitter_y)])
+    jx, jy = _jitter()
+    adb_cmd(["shell", "input", "tap", str(x + jx), str(y + jy)])
     time.sleep(random.uniform(0.05, 0.15))
+
+def drag(x1, y1, x2, y2, duration_ms=400):
+    """Swipe from card slot to arena position — required for CR card placement."""
+    jx, jy = _jitter()
+    adb_cmd([
+        "shell", "input", "swipe",
+        str(x1 + jx), str(y1 + jy),
+        str(x2), str(y2),
+        str(duration_ms),
+    ])
+    time.sleep(random.uniform(0.1, 0.25))
 
 def screenshot():
     result = adb_cmd(["exec-out", "screencap", "-p"])
@@ -43,9 +59,24 @@ def save_screenshot(path=r"C:\debug_screen.png"):
 def key_event(keycode):
     adb_cmd(["shell", "input", "keyevent", str(keycode)])
 
+# ─── DEBUG: coordinate overlay ───────────────────────────────────────────────
+
+def save_coord_overlay(screen, card_positions, play_samples, path=r"C:\debug_coords.png"):
+    """Draw card slots (green) and arena targets (red) on a screenshot."""
+    img = screen.copy()
+    for idx, (cx, cy) in card_positions.items():
+        cv2.circle(img, (cx, cy), 18, (0, 255, 0), 3)
+        cv2.putText(img, f"C{idx}", (cx - 12, cy - 22),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+    for (px, py) in play_samples:
+        cv2.circle(img, (px, py), 12, (0, 0, 255), 2)
+        cv2.putText(img, "X", (px - 7, py + 6),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+    cv2.imwrite(path, img)
+    print(f"Coord overlay saved to {path}")
+
 # ─── SCREEN DETECTION ────────────────────────────────────────────────────────
-# All detection uses proportional coordinates (fractions of h/w) so the bot
-# works at any emulator resolution and orientation.
+# All regions use proportional coordinates so the bot works at any resolution.
 
 def is_on_home_screen(screen):
     """Battle button: golden-yellow band in lower-center of screen."""
@@ -55,54 +86,51 @@ def is_on_home_screen(screen):
     yellow = cv2.inRange(hsv, (18, 160, 160), (38, 255, 255))
     return cv2.countNonZero(yellow) > 400
 
-def is_in_battle(screen):
-    """Purple elixir bar at the bottom-left of the screen."""
+def _elixir_purple_count(screen):
+    """Raw purple pixel count in the elixir bar region."""
     h, w = screen.shape[:2]
     region = screen[int(h * 0.86):int(h * 0.93), int(w * 0.05):int(w * 0.55)]
     hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
-    # Purple/violet in OpenCV HSV: hue 130-160
     purple = cv2.inRange(hsv, (130, 60, 60), (160, 255, 255))
-    return cv2.countNonZero(purple) > 80
+    return cv2.countNonZero(purple)
+
+def is_in_battle(screen):
+    """Purple elixir bar present at bottom-left → we are in a battle."""
+    return _elixir_purple_count(screen) > 80
 
 def is_battle_ended(screen):
-    """Victory/Defeat banner floods the center of the screen with bright pixels."""
+    """Victory/Defeat banner floods center with bright pixels."""
     h, w = screen.shape[:2]
     region = screen[int(h * 0.20):int(h * 0.50), int(w * 0.10):int(w * 0.90)]
     gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
     bright = cv2.countNonZero(cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)[1])
-    total_pixels = region.shape[0] * region.shape[1]
-    return bright > total_pixels * 0.30
+    return bright > region.shape[0] * region.shape[1] * 0.30
 
 def did_win(screen):
-    """Compare golden crown pixels on our side vs their side at top of screen."""
+    """More golden crown pixels on our half than theirs."""
     h, w = screen.shape[:2]
-    ours = screen[int(h * 0.02):int(h * 0.08), int(w * 0.05):int(w * 0.40)]
-    theirs = screen[int(h * 0.02):int(h * 0.08), int(w * 0.60):int(w * 0.95)]
-    our_gold = cv2.countNonZero(cv2.inRange(ours, (0, 150, 150), (50, 255, 255)))
-    their_gold = cv2.countNonZero(cv2.inRange(theirs, (0, 150, 150), (50, 255, 255)))
-    return our_gold > their_gold
+    ours   = screen[int(h*0.02):int(h*0.08), int(w*0.05):int(w*0.40)]
+    theirs = screen[int(h*0.02):int(h*0.08), int(w*0.60):int(w*0.95)]
+    our_g   = cv2.countNonZero(cv2.inRange(ours,   (0, 150, 150), (50, 255, 255)))
+    their_g = cv2.countNonZero(cv2.inRange(theirs, (0, 150, 150), (50, 255, 255)))
+    return our_g > their_g
 
 def get_elixir(screen):
-    """Estimate elixir 0-10 from width of purple bar."""
-    h, w = screen.shape[:2]
-    region = screen[int(h * 0.87):int(h * 0.92), int(w * 0.05):int(w * 0.55)]
-    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
-    purple = cv2.inRange(hsv, (130, 60, 60), (160, 255, 255))
-    return min(10, int(cv2.countNonZero(purple) / 15))
+    """Estimate elixir 0-10 from purple pixel count in elixir bar."""
+    return min(10, int(_elixir_purple_count(screen) / 15))
 
 def is_loading(screen):
-    """Screen is mostly dark (loading/transitioning)."""
     h, w = screen.shape[:2]
     gray = cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY)
     very_dark = cv2.countNonZero(cv2.threshold(gray, 20, 255, cv2.THRESH_BINARY_INV)[1])
     return very_dark > (w * h * 0.7)
 
 def is_matchmaking(screen):
-    """Red cancel button at bottom-center during matchmaking."""
+    """Red cancel button at bottom-center → waiting for opponent."""
     h, w = screen.shape[:2]
     region = screen[int(h * 0.78):int(h * 0.90), int(w * 0.25):int(w * 0.75)]
     hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
-    red1 = cv2.inRange(hsv, (0, 150, 150), (10, 255, 255))
+    red1 = cv2.inRange(hsv, (0,   150, 150), (10,  255, 255))
     red2 = cv2.inRange(hsv, (170, 150, 150), (180, 255, 255))
     return cv2.countNonZero(red1) + cv2.countNonZero(red2) > 200
 
@@ -118,26 +146,34 @@ def get_card_tap_positions(w, h):
         3: (int(w * 0.72), y),
     }
 
-def get_play_position(card_index, game_time, w, h):
-    """Where to drop the card on the arena (portrait coordinates)."""
+# Arena playfield bounds (proportion of screen): x 5-95%, y 15-80%
+ARENA_X_MIN, ARENA_X_MAX = 0.05, 0.95
+ARENA_Y_MIN, ARENA_Y_MAX = 0.15, 0.80
+
+def get_play_position(game_time, w, h):
+    """Random legal arena target, proportional to screen size."""
     if game_time < 90:
-        # Early game: play defensively near the bridge
         positions = [
             (0.50, 0.62), (0.38, 0.60), (0.62, 0.60),
             (0.50, 0.70), (0.38, 0.68), (0.62, 0.68),
         ]
     else:
-        # Double elixir: push into opponent territory
         positions = [
             (0.50, 0.52), (0.38, 0.50), (0.62, 0.50),
             (0.50, 0.58), (0.38, 0.56), (0.62, 0.56),
         ]
     px, py = random.choice(positions)
-    x = int(px * w) + random.randint(-15, 15)
-    y = int(py * h) + random.randint(-10, 10)
+    x = int(px * w) + (0 if DEBUG_NO_JITTER else random.randint(-15, 15))
+    y = int(py * h) + (0 if DEBUG_NO_JITTER else random.randint(-10, 10))
+
+    # Clamp to legal arena bounds (#6)
+    x = max(int(ARENA_X_MIN * w), min(int(ARENA_X_MAX * w), x))
+    y = max(int(ARENA_Y_MIN * h), min(int(ARENA_Y_MAX * h), y))
     return x, y
 
 def should_play(elixir, last_play_time, cards_played):
+    if DEBUG_FORCE_PLAY:
+        return True, cards_played % 4
     if elixir < 4:
         return False, None
     if time.time() - last_play_time < 2.0:
@@ -167,6 +203,8 @@ class RoyaleBot:
         self.on_status = on_status
         self.screen_w = None
         self.screen_h = None
+        self._battle_confirm = 0   # debounce counter (#7)
+        self._coords_saved = False
 
     def log(self, msg):
         ts = datetime.now().strftime("%H:%M:%S")
@@ -191,9 +229,8 @@ class RoyaleBot:
 
     def find_and_tap_battle(self, screen):
         h, w = screen.shape[:2]
-        bx = int(w * 0.40)
-        by = int(h * 0.77)
-        self.log(f"🎮 Tapping battle button at ({bx}, {by}) on {w}x{h} screen...")
+        bx, by = int(w * 0.40), int(h * 0.77)
+        self.log(f"🎮 Tapping battle button at ({bx}, {by}) on {w}x{h}...")
         tap(bx, by)
         time.sleep(2)
 
@@ -211,13 +248,23 @@ class RoyaleBot:
         battle_start = time.time()
         w, h = self.screen_w, self.screen_h
         card_positions = get_card_tap_positions(w, h)
-        self.log(f"🃏 Card tap positions: {card_positions}")
+        self.log(f"🃏 Card slots: { {k: v for k, v in card_positions.items()} }")
+
+        # Save coordinate overlay once so positions can be verified visually (#2)
+        if DEBUG_SAVE_COORDS and not self._coords_saved:
+            try:
+                screen0 = screenshot()
+                samples = [get_play_position(0, w, h) for _ in range(6)]
+                save_coord_overlay(screen0, card_positions, samples)
+                self._coords_saved = True
+            except Exception as e:
+                self.log(f"Coord overlay error: {e}")
 
         while time.time() - battle_start < 250:
             if not self.running:
                 break
             try:
-                screen = screenshot()
+                screen = screenshot()   # single capture, reused for all checks (#9)
 
                 if is_battle_ended(screen):
                     won = did_win(screen)
@@ -237,28 +284,39 @@ class RoyaleBot:
 
                 elixir = get_elixir(screen)
                 game_time = time.time() - state.start_time
+
+                if DEBUG:
+                    purple_px = _elixir_purple_count(screen)
+                    self.log(f"💧 Elixir: {elixir}/10  (purple_px={purple_px})  t={int(game_time)}s")
+
                 should, card_idx = should_play(elixir, state.last_play_time, state.cards_played)
 
                 if should and card_idx is not None:
                     phase = "early" if game_time < 90 else "double"
-                    x, y = get_play_position(card_idx, game_time, w, h)
+                    cx, cy = card_positions[card_idx]
+                    tx, ty = get_play_position(game_time, w, h)
 
-                    tap(card_positions[card_idx][0], card_positions[card_idx][1])
-                    time.sleep(random.uniform(0.15, 0.35))
-                    tap(x, y)
+                    # Validate arena bounds before sending (#6)
+                    legal = (ARENA_X_MIN * w <= tx <= ARENA_X_MAX * w and
+                             ARENA_Y_MIN * h <= ty <= ARENA_Y_MAX * h)
+                    if not legal:
+                        self.log(f"⚠️ Target ({tx},{ty}) outside arena bounds — skipping")
+                        continue
+
+                    # Drag from card slot to arena position (#1)
+                    drag(cx, cy, tx, ty, duration_ms=400)
 
                     state.placements.append({
                         "card_slot": card_idx,
-                        "x": round(x / w, 3),
-                        "y": round(y / h, 3),
+                        "x": round(tx / w, 3),
+                        "y": round(ty / h, 3),
                         "elixir_at_play": elixir,
                         "game_time_ms": int(game_time * 1000),
                         "phase": phase,
                     })
-
                     state.last_play_time = time.time()
                     state.cards_played += 1
-                    self.log(f"🃏 Card {card_idx} → ({x},{y}) | Elixir: {elixir}")
+                    self.log(f"🃏 Card {card_idx} dragged ({cx},{cy})→({tx},{ty}) | Elixir: {elixir} | {phase}")
 
                 time.sleep(random.uniform(0.4, 0.9))
 
@@ -271,33 +329,43 @@ class RoyaleBot:
     def run(self):
         self.running = True
         self.log("🤖 RoyaleBot started!")
+        if DEBUG:
+            self.log(f"🐛 DEBUG mode ON | FORCE_PLAY={DEBUG_FORCE_PLAY} | NO_JITTER={DEBUG_NO_JITTER}")
         subprocess.run([ADB, "connect", DEVICE], capture_output=True)
         time.sleep(1)
 
-        # Detect screen dimensions once from the first screenshot
+        # Detect and log screen resolution (#5)
         first = screenshot()
         self.screen_h, self.screen_w = first.shape[:2]
         self.log(f"📐 Screen detected: {self.screen_w}x{self.screen_h}")
 
         while self.running:
             try:
-                screen = screenshot()
+                screen = screenshot()   # one capture per main-loop iteration (#9)
 
+                # Debounced battle detection (#7)
                 if is_in_battle(screen):
-                    self.play_battle()
+                    self._battle_confirm += 1
+                    if self._battle_confirm >= BATTLE_DEBOUNCE:
+                        self._battle_confirm = 0
+                        self.play_battle()
                 elif is_on_home_screen(screen):
+                    self._battle_confirm = 0
                     self.log("🏠 Home screen — starting battle!")
                     self.find_and_tap_battle(screen)
                     wait = random.randint(20, 45)
                     self.log(f"⏳ Matchmaking... waiting {wait}s")
                     time.sleep(wait)
                 elif is_matchmaking(screen):
+                    self._battle_confirm = 0
                     self.log("⏳ In matchmaking queue...")
                     time.sleep(5)
                 elif is_loading(screen):
+                    self._battle_confirm = 0
                     self.log("⏳ Loading...")
                     time.sleep(3)
                 else:
+                    self._battle_confirm = 0
                     self.log("🔍 Unknown screen — saving debug screenshot...")
                     save_screenshot(r"C:\debug_screen.png")
                     time.sleep(3)
@@ -355,13 +423,13 @@ try:
             stats.grid_columnconfigure((0,1,2), weight=1)
 
             self.battles_var = ctk.StringVar(value="0")
-            self.wins_var = ctk.StringVar(value="0")
-            self.losses_var = ctk.StringVar(value="0")
+            self.wins_var    = ctk.StringVar(value="0")
+            self.losses_var  = ctk.StringVar(value="0")
 
             for i, (lbl, var, col) in enumerate([
                 ("BATTLES", self.battles_var, "#ff9a40"),
-                ("WINS", self.wins_var, "#4caf50"),
-                ("LOSSES", self.losses_var, "#f44336"),
+                ("WINS",    self.wins_var,    "#4caf50"),
+                ("LOSSES",  self.losses_var,  "#f44336"),
             ]):
                 f = ctk.CTkFrame(stats, fg_color="#111133")
                 f.grid(row=0, column=i, padx=5, pady=10, sticky="ew")
