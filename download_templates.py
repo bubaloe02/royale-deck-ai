@@ -5,9 +5,9 @@ import os
 import shutil
 
 REPOS = [
-    ("https://github.com/pyclashbot/py-clash-bot/archive/refs/heads/main.zip",
+    ("https://github.com/pyclashbot/py-clash-bot/archive/HEAD.zip",
      "C:\\py-clash-bot"),
-    ("https://github.com/jlaiii/TKH/archive/refs/heads/main.zip",
+    ("https://github.com/jlaiii/TKH/archive/HEAD.zip",
      "C:\\TKH"),
 ]
 TEMPLATES_DIR = "C:\\templates"
@@ -30,7 +30,8 @@ for url, dest in REPOS:
             parent = os.path.dirname(dest)
             for item in os.listdir(parent):
                 full = os.path.join(parent, item)
-                if item.endswith("-main") and os.path.isdir(full):
+                repo_base = os.path.basename(dest).lower()
+                if item.lower().startswith(repo_base) and os.path.isdir(full):
                     if not os.path.exists(dest):
                         os.rename(full, dest)
                         break
