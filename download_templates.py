@@ -17,8 +17,8 @@ for url, dest in REPOS:
     else:
         print(f"[clone] {url} → {dest}")
         result = subprocess.run(
-            ["git", "clone", "--depth", "1", url, dest],
-            capture_output=True, text=True
+            f'git clone --depth 1 "{url}" "{dest}"',
+            capture_output=True, text=True, shell=True
         )
         if result.returncode != 0:
             print(f"  ERROR: {result.stderr.strip()}")
