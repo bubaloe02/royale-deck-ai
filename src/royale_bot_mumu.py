@@ -675,50 +675,11 @@ class OpponentCycleTracker:
     def cards_seen(self):
         return list(self._unique)
 
-# ─── HAND SCORER (#5 + combo) ────────────────────────────────────────────────
-
-def score_hand(hand, prev_card, phase, lane_p, game_time, troops=None):
-    """
-    Score each card slot (0-3) and return the best slot to play.
-    Combines phase-fit heuristic + learned combo win rates.
-    """
-    scores = {}
-    for slot, card in enumerate(hand):
-        ctype  = card_type(card)
-        score  = 0.0
-
-        # Phase fit
-        if phase == PHASE_DEFENDING:
-            if ctype in ("mini_tank", "building", "spell_small"):
-                score += 3
-        elif phase == PHASE_COUNTERPUSH:
-            if ctype in ("win_condition", "tank", "support"):
-                score += 3
-        elif phase in (PHASE_DOUBLE, PHASE_OVERTIME):
-            if ctype in ("win_condition", "spell_big"):
-                score += 2
-
-        # Archetype fit: prefer win_condition when rushing is advised
-        if lane_p.hot_lane is None and ctype == "win_condition":
-            score += 1
-
-        # Combo bonus
-        score += COMBO_DB.score_follow_up(prev_card, card, phase) * 2
-
-        # Spell penalty when there are no targets early
-        if ctype in _SPELL_LIKE and game_time < 30:
-            score -= 4
-        elif ctype in _SPELL_LIKE and troops is not None and len(troops) < 2:
-            score -= 2
-
-        scores[slot] = score
-
-    return max(scores, key=scores.get)
-
 WAIT_DB  = WaitDB()
 COMBO_DB = ComboTracker()
 
 # ─── ADB CONTROLLER ──────────────────────────────────────────────────────────
+
 
 def adb_cmd(cmd_list):
     return subprocess.run([ADB, "-s", DEVICE] + cmd_list, capture_output=True)
@@ -1151,14 +1112,17 @@ class ReplayLogger:
     def elapsed_ms(self):
         return int((time.time() - self._start_time) * 1000)
 
-    def maybe_sample_hp(self, screen):
+    def maybe_sample_hp(self, screen=None, towers=None):
         elapsed = time.time() - self._start_time
         if elapsed - self._last_hp_sample < self.HP_SAMPLE_INTERVAL:
             return None
-        hp = sample_tower_hp(screen)
-        self.tower_hp_timeline.append({"game_time_ms": int(elapsed * 1000), **hp})
+        if towers is None:
+            if screen is None:
+                return None
+            towers = sample_tower_hp(screen)
+        self.tower_hp_timeline.append({"game_time_ms": int(elapsed * 1000), **towers})
         self._last_hp_sample = elapsed
-        return hp
+        return towers
 
     def log_placement(self, card_slot, card_name, tx, ty,
                       elixir, phase, battle_phase,
@@ -1228,6 +1192,281 @@ class ReplayLogger:
             print(f"Worker send error: {e}")
             return False
 
+# ─── VISUAL SNAPSHOT ─────────────────────────────────────────────────────────
+
+class VisualSnapshot:
+    """
+    Immutable record of everything VisionEngine sees in a single frame.
+    Produced once per tick; consumed by GameState and DecisionEngine.
+    """
+    __slots__ = ("screen_state", "towers", "troops", "elixir", "ok_button")
+
+    def __init__(self, screen_state, towers, troops, elixir, ok_button):
+        self.screen_state = screen_state   # ScreenState instance
+        self.towers       = towers         # dict from sample_tower_hp, or {}
+        self.troops       = troops         # list of {x_norm, y_norm} blobs
+        self.elixir       = elixir         # int 0-10
+        self.ok_button    = ok_button      # (x, y) or None
+
+# ─── VISION ENGINE ────────────────────────────────────────────────────────────
+
+class VisionEngine:
+    """
+    Single entry point for all visual detection.
+    Screenshot → VisualSnapshot in one call.
+    Owns the TroopDetector so frame-diff state is preserved across ticks.
+    """
+    def __init__(self):
+        self._troop_det = TroopDetector()
+
+    def analyze(self, screen) -> VisualSnapshot:
+        ss = detect_screen(screen)
+        ib = (ss == ScreenState.BATTLE)
+        return VisualSnapshot(
+            screen_state = ss,
+            towers    = sample_tower_hp(screen) if ib else {},
+            troops    = self._troop_det.detect(screen) if ib else [],
+            elixir    = get_elixir(screen) if ib else 0,
+            ok_button = find_ok_button(screen) if ss == ScreenState.RESULT else None,
+        )
+
+# ─── UNIFIED GAME STATE ───────────────────────────────────────────────────────
+
+class GameState:
+    """
+    Accumulated battle context updated every tick.
+    VisionEngine fills `.visual`; everything else evolves from that.
+    """
+    def __init__(self, deck, screen_w, screen_h):
+        self.rotation      = CardRotation(deck)
+        self.phase_machine = BattleStateMachine()
+        self.lane_pressure = LanePressureTracker()
+        self.archetype     = ArchetypeDetector()
+        self.opp_cycle     = OpponentCycleTracker()
+        self.replay        = ReplayLogger(screen_w, screen_h, deck)
+
+        self.visual        = None     # latest VisualSnapshot
+        self.game_time     = 0.0
+        self.prev_card     = ""
+        self.cards_played  = 0
+        self._start_time   = time.time()
+
+    def tick(self, visual: VisualSnapshot):
+        self.visual    = visual
+        self.game_time = time.time() - self._start_time
+        if visual.towers:
+            self.lane_pressure.update(visual.towers)
+            self.replay.maybe_sample_hp(towers=visual.towers)
+        self.phase_machine.update(self.game_time, self.lane_pressure)
+
+    @property
+    def phase(self):
+        return self.phase_machine.phase
+
+    @property
+    def is_double(self):
+        return self.phase_machine.is_double
+
+    @property
+    def hand(self):
+        return self.rotation.hand
+
+# ─── OPENING BOOK ─────────────────────────────────────────────────────────────
+
+class OpeningBook:
+    """Scripted tile pool for the first 15 s of a battle."""
+    _BOOK = {
+        "cycle":         ["bridge_left", "bridge_right"],
+        "win_condition": ["bridge_left", "bridge_right"],
+        "support":       ["support_left", "support_right"],
+        "mini_tank":     ["support_left", "support_right"],
+        "tank":          ["support_left", "support_right"],
+    }
+
+    def suggest_tile(self, card_name, game_time, hot_lane):
+        if game_time > 15:
+            return None
+        pool = self._BOOK.get(card_type(card_name))
+        if not pool:
+            return None
+        if hot_lane == "left":
+            pool = [t for t in pool if "left" in t] or pool
+        elif hot_lane == "right":
+            pool = [t for t in pool if "right" in t] or pool
+        return random.choice(pool)
+
+# ─── BOARD EVALUATOR ─────────────────────────────────────────────────────────
+
+class BoardEvaluator:
+    """Summarises board state from a GameState for decision-making."""
+    def score(self, gs: GameState) -> dict:
+        lp = gs.lane_pressure
+        tw = gs.visual.towers if gs.visual else {}
+        return {
+            "pressure_left":  lp.left,
+            "pressure_right": lp.right,
+            "hot_lane":       lp.hot_lane,
+            "under_attack":   lp.under_attack,
+            "our_hp_min":     min(tw.get("our_left", 100), tw.get("our_right", 100)),
+            "their_hp_min":   min(tw.get("their_left", 100), tw.get("their_right", 100)),
+        }
+
+# ─── SPELL EVALUATOR ─────────────────────────────────────────────────────────
+
+class SpellEvaluator:
+    """Gates spell casts on troop density using spell_target_value."""
+    def can_cast(self, card_name, tx, ty, w, h, troops) -> bool:
+        if not troops:
+            return True
+        value   = spell_target_value(card_name, tx / w, ty / h, troops)
+        min_hit = 1 if card_type(card_name) == "spell_big" else 3
+        return value >= min_hit
+
+# ─── ACTIONS ─────────────────────────────────────────────────────────────────
+
+class Action:
+    def execute(self):
+        raise NotImplementedError
+
+class TapAction(Action):
+    def __init__(self, x, y):
+        self.x, self.y = x, y
+    def execute(self):
+        tap(self.x, self.y)
+
+class DragAction(Action):
+    def __init__(self, x1, y1, x2, y2, duration_ms=150):
+        self.x1, self.y1, self.x2, self.y2 = x1, y1, x2, y2
+        self.duration_ms = duration_ms
+    def execute(self):
+        drag(self.x1, self.y1, self.x2, self.y2, self.duration_ms)
+
+class WaitAction(Action):
+    def __init__(self, duration=0.1):
+        self.duration = duration
+    def execute(self):
+        time.sleep(self.duration)
+
+class PlayCardAction(Action):
+    def __init__(self, slot, card_name, from_xy, to_xy, tile_name=""):
+        self.slot      = slot
+        self.card_name = card_name
+        self.from_x, self.from_y = from_xy
+        self.to_x,   self.to_y   = to_xy
+        self.tile_name = tile_name
+    def execute(self):
+        drag(self.from_x, self.from_y, self.to_x, self.to_y)
+
+# ─── DECISION ENGINE ─────────────────────────────────────────────────────────
+
+class DecisionEngine:
+    """
+    Consumes a GameState, returns an Action.
+    Owns all sub-evaluators and the deferred-reward tracker.
+    """
+    def __init__(self):
+        self.opening_book    = OpeningBook()
+        self.spell_evaluator = SpellEvaluator()
+        self.board_evaluator = BoardEvaluator()
+        self.enemy_elixir    = EnemyElixirTracker()
+        self.reward_scorer   = RewardEngine()
+        self._last_play_t    = 0.0
+        self._play_cooldown  = human_play_interval()
+        self._wait_start     = None
+        self.pending_reward  = None
+
+    def decide(self, gs: GameState, w: int, h: int, card_positions: dict) -> Action:
+        visual = gs.visual
+        self.enemy_elixir.update(is_double=gs.is_double)
+
+        cooldown_ok = time.time() - self._last_play_t >= self._play_cooldown
+        elixir_ok   = visual.elixir >= 4 or DEBUG_FORCE_PLAY
+        skip_rand   = (not DEBUG_FORCE_PLAY) and random.random() < 0.20
+
+        if not (cooldown_ok and elixir_ok and not skip_rand):
+            if self._wait_start is None:
+                self._wait_start = time.time()
+            return WaitAction(random.uniform(0.05, 0.15))
+
+        # Resolve deferred reward from the previous card play
+        if self.pending_reward is not None and visual.towers:
+            self.reward_scorer.record(
+                self.pending_reward["entry"],
+                self.pending_reward["hp_before"],
+                visual.towers,
+                self.pending_reward["elixir"],
+            )
+            self.pending_reward = None
+
+        # Log the wait that just ended
+        if self._wait_start is not None:
+            gs.replay.log_wait("cooldown",
+                               int((time.time() - self._wait_start) * 1000),
+                               gs.phase)
+            self._wait_start = None
+
+        phase  = gs.phase
+        troops = visual.troops
+        board  = self.board_evaluator.score(gs)
+
+        candidates = []
+        for s in range(4):
+            cname = gs.rotation.card_at(s)
+            pos   = get_play_position(cname, phase, gs.lane_pressure,
+                                      gs.game_time, w, h, troops)
+            if pos is None:
+                continue
+            tx, ty, tile_name = pos
+            if card_type(cname) in _SPELL_LIKE:
+                if not self.spell_evaluator.can_cast(cname, tx, ty, w, h, troops):
+                    continue
+            sc  = COMBO_DB.score_follow_up(gs.prev_card, cname, phase)
+            ctp = card_type(cname)
+            if phase == PHASE_DEFENDING and ctp in ("mini_tank", "building", "spell_small"):
+                sc += 0.3
+            elif phase == PHASE_COUNTERPUSH and ctp in ("win_condition", "tank", "support"):
+                sc += 0.3
+            elif phase in (PHASE_DOUBLE, PHASE_OVERTIME) and ctp in ("win_condition", "spell_big"):
+                sc += 0.2
+            candidates.append((sc, s, cname, (tx, ty, tile_name)))
+
+        if not candidates:
+            gs.replay.log_wait("all_held", 0, phase)
+            return WaitAction(random.uniform(0.05, 0.15))
+
+        _, slot, card_name, (tx, ty, tile_name) = max(candidates, key=lambda x: x[0])
+        cx, cy = card_positions[slot]
+        return PlayCardAction(slot, card_name, (cx, cy), (tx, ty), tile_name)
+
+    def apply(self, action: Action, gs: GameState, w: int, h: int) -> None:
+        """Execute the action and update GameState. Call after decide()."""
+        if isinstance(action, PlayCardAction):
+            hp_before = dict(gs.visual.towers) if gs.visual.towers else {}
+            action.execute()
+
+            phase_str = "early" if gs.game_time < 90 else "double"
+            entry = gs.replay.log_placement(
+                action.slot, action.card_name, action.to_x, action.to_y,
+                gs.visual.elixir, phase_str, gs.phase,
+                tile_name=action.tile_name,
+                prev_card=gs.prev_card,
+                opponent_cards_seen=gs.opp_cycle.cards_seen,
+            )
+            self.pending_reward = {
+                "entry":    entry,
+                "hp_before": hp_before,
+                "elixir":   gs.visual.elixir,
+            }
+            gs.rotation.play(action.slot)
+            gs.prev_card     = action.card_name
+            gs.cards_played += 1
+            self._last_play_t   = time.time()
+            learned_wait        = WAIT_DB.sample_wait(gs.phase)
+            self._play_cooldown = (learned_wait if learned_wait
+                                   else human_play_interval(gs.phase))
+        else:
+            action.execute()
+
 # ─── MAIN BOT ────────────────────────────────────────────────────────────────
 
 class RoyaleBot:
@@ -1269,44 +1508,16 @@ class RoyaleBot:
         tap(bx, by)
         time.sleep(2)
 
-    def dismiss_result(self):
-        """Tap OK whenever visible; return as soon as home screen appears."""
-        self.log("⏳ Dismissing result screen...")
-        timeout = time.time() + 30
-        while self.running and time.time() < timeout:
-            try:
-                scr = screenshot()
-                if is_on_home_screen(scr):
-                    self.log("✅ Back on home screen.")
-                    return
-                btn = find_ok_button(scr)
-                if btn:
-                    self.log(f"👆 OK at {btn}")
-                    tap(*btn)
-                    time.sleep(0.8)
-                else:
-                    time.sleep(0.2)
-            except Exception as e:
-                self.log(f"Dismiss error: {e}")
-                time.sleep(0.2)
-        self.log("⚠️ Result dismissal timed out.")
-
     def play_battle(self):
-        deck        = self._get_deck()
-        replay      = ReplayLogger(self.screen_w, self.screen_h, deck)
-        rotation    = CardRotation(deck)
-        state       = BattleStateMachine()
-        lane_p      = LanePressureTracker()
-        enemy_ex    = EnemyElixirTracker()
-        reward      = RewardEngine()
-        troop_det   = TroopDetector()
-        archetype   = ArchetypeDetector()
-        opp_cycle   = OpponentCycleTracker()
-
-        self.log(f"⚔️ Battle #{self.battles_played + 1} | id={replay.battle_id}")
-
-        w, h = self.screen_w, self.screen_h
+        deck   = self._get_deck()
+        vision = VisionEngine()
+        gs     = GameState(deck, self.screen_w, self.screen_h)
+        engine = DecisionEngine()
+        w, h   = self.screen_w, self.screen_h
         card_positions = get_card_tap_positions(w, h)
+        result = "loss"
+
+        self.log(f"⚔️ Battle #{self.battles_played + 1} | id={gs.replay.battle_id}")
         self.log(f"🃏 Card slots: {card_positions}")
 
         if DEBUG_SAVE_COORDS and not self._coords_saved:
@@ -1316,182 +1527,93 @@ class RoyaleBot:
             except Exception as e:
                 self.log(f"Coord overlay error: {e}")
 
-        result         = "loss"
-        battle_start   = time.time()
-        last_play_t    = 0
-        cards_played   = 0
-        play_cooldown  = human_play_interval()
-        prev_card      = ""     # last card played (for sequence logging)
-        _wait_start    = None   # tracks when a wait period began
-        pending_reward = None   # deferred reward: resolved on next HP sample
-
-        while time.time() - battle_start < 250:
+        while time.time() - gs._start_time < 250:
             if not self.running:
                 break
             try:
-                screen    = screenshot()
-                game_time = time.time() - battle_start
+                screen = screenshot()
+                visual = vision.analyze(screen)
+                gs.tick(visual)
 
-                if game_time > 20 and is_battle_ended(screen):
+                # Battle end detection
+                if gs.game_time > 20 and visual.screen_state == ScreenState.RESULT:
                     result = "win" if did_win(screen) else "loss"
                     self.log(f"{'🏆 WIN' if result == 'win' else '💀 LOSS'}!")
                     break
 
-                if not is_in_battle(screen):
+                if visual.screen_state != ScreenState.BATTLE:
                     time.sleep(0.05)
                     continue
 
-                # HP sampling + systems update
-                hp = replay.maybe_sample_hp(screen) or (
-                    replay.tower_hp_timeline[-1] if replay.tower_hp_timeline else {})
-                lane_p.update(hp)
-                enemy_ex.update(is_double=state.is_double)
-                state.update(game_time, lane_p)
-
-                troops = troop_det.detect(screen)
-                elixir = get_elixir(screen)
-
                 if DEBUG:
                     self.log(
-                        f"💧 {elixir}/10  t={int(game_time)}s  "
-                        f"phase={state.phase}  arch={archetype.archetype}  "
-                        f"lane L={lane_p.left:.0f} R={lane_p.right:.0f}  "
-                        f"enemy_ex≈{enemy_ex.estimate:.1f}  "
-                        f"troops={len(troops)}  hand={rotation.hand}"
+                        f"💧 {visual.elixir}/10  t={int(gs.game_time)}s  "
+                        f"phase={gs.phase}  arch={gs.archetype.archetype}  "
+                        f"lane L={gs.lane_pressure.left:.0f} R={gs.lane_pressure.right:.0f}  "
+                        f"enemy_ex≈{engine.enemy_elixir.estimate:.1f}  "
+                        f"troops={len(visual.troops)}  hand={gs.hand}"
                     )
 
-                # Decide whether to play
-                cooldown_ok = time.time() - last_play_t >= play_cooldown
-                elixir_ok   = elixir >= 4 or DEBUG_FORCE_PLAY
-                skip_rand   = (not DEBUG_FORCE_PLAY) and random.random() < 0.20
+                # Vision Engine → GameState → Decision Engine → Action
+                action = engine.decide(gs, w, h, card_positions)
 
-                if cooldown_ok and elixir_ok and not skip_rand:
-                    if _wait_start is not None:
-                        replay.log_wait("cooldown",
-                                        int((time.time() - _wait_start) * 1000),
-                                        state.phase)
-                        _wait_start = None
+                if isinstance(action, PlayCardAction):
+                    self.log(
+                        f"🃏 {action.card_name} [{card_type(action.card_name)}] "
+                        f"tile={action.tile_name} "
+                        f"({action.from_x},{action.from_y})→({action.to_x},{action.to_y}) "
+                        f"lane={classify_lane(action.to_x / w)} "
+                        f"elixir={visual.elixir} phase={gs.phase}"
+                    )
 
-                    # Resolve deferred reward from the previous card play
-                    if pending_reward is not None and hp:
-                        reward.record(pending_reward["entry"],
-                                      pending_reward["hp_before"],
-                                      hp, pending_reward["elixir"])
-                        pending_reward = None
-
-                    # Evaluate ALL 4 slots so a held spell never freezes the rotation.
-                    phase_str  = "early" if game_time < 90 else "double"
-                    candidates = []   # (score, slot, card_name, pos)
-                    for s in range(4):
-                        cname = rotation.card_at(s)
-                        pos   = get_play_position(cname, state.phase, lane_p,
-                                                  game_time, w, h, troops)
-                        if pos is None:
-                            continue
-                        ctp = card_type(cname)
-                        sc  = COMBO_DB.score_follow_up(prev_card, cname, state.phase)
-                        if state.phase == PHASE_DEFENDING and ctp in (
-                                "mini_tank", "building", "spell_small"):
-                            sc += 0.3
-                        elif state.phase == PHASE_COUNTERPUSH and ctp in (
-                                "win_condition", "tank", "support"):
-                            sc += 0.3
-                        elif state.phase in (PHASE_DOUBLE, PHASE_OVERTIME) and ctp in (
-                                "win_condition", "spell_big"):
-                            sc += 0.2
-                        candidates.append((sc, s, cname, pos))
-
-                    if not candidates:
-                        self.log("⏭️ All cards held — no valid targets this tick")
-                        replay.log_wait("all_held", 0, state.phase)
-                    else:
-                        _, slot, card_name, pos = max(candidates, key=lambda x: x[0])
-                        ctype     = card_type(card_name)
-                        tx, ty, tile_name = pos
-                        cx, cy    = card_positions[slot]
-
-                        hp_before = dict(hp)
-                        drag(cx, cy, tx, ty, duration_ms=150)
-                        rotation.play(slot)
-
-                        x_n   = round(tx / w, 3)
-                        entry = replay.log_placement(
-                            slot, card_name, tx, ty,
-                            elixir, phase_str, state.phase,
-                            tile_name=tile_name,
-                            prev_card=prev_card,
-                        )
-
-                        # Defer reward to next HP sample — removes blocking sleep
-                        pending_reward = {"entry": entry,
-                                          "hp_before": hp_before,
-                                          "elixir": elixir}
-
-                        prev_card     = card_name
-                        last_play_t   = time.time()
-                        learned_wait  = WAIT_DB.sample_wait(state.phase)
-                        play_cooldown = (learned_wait if learned_wait
-                                         else human_play_interval(state.phase))
-                        cards_played += 1
-
-                        self.log(
-                            f"🃏 {card_name} [{ctype}] tile={tile_name} "
-                            f"({cx},{cy})→({tx},{ty}) "
-                            f"lane={classify_lane(x_n)} "
-                            f"elixir={elixir} phase={state.phase}"
-                        )
-                else:
-                    if _wait_start is None:
-                        _wait_start = time.time()
-
-                time.sleep(random.uniform(0.05, 0.15))
+                engine.apply(action, gs, w, h)
 
             except Exception as e:
                 self.log(f"Battle error: {e}")
                 time.sleep(1)
 
-        # Resolve any reward entry that didn't get a second HP sample
-        if pending_reward is not None:
+        # Resolve any dangling deferred reward
+        if engine.pending_reward is not None:
             try:
-                hp_final = sample_tower_hp(screenshot())
-                reward.record(pending_reward["entry"], pending_reward["hp_before"],
-                              hp_final, pending_reward["elixir"])
+                final_towers = sample_tower_hp(screenshot())
+                engine.reward_scorer.record(
+                    engine.pending_reward["entry"],
+                    engine.pending_reward["hp_before"],
+                    final_towers,
+                    engine.pending_reward["elixir"],
+                )
             except Exception:
                 pass
 
         won  = result == "win"
-        arch = archetype.archetype
+        arch = gs.archetype.archetype
 
-        # Feed placements into PlacementDB
-        for p in replay.placements:
+        for p in gs.replay.placements:
             PLACEMENT_DB.record(p["card_name"], p["battle_phase"], p["lane"],
                                 p["x_norm"], p["y_norm"], won)
         PLACEMENT_DB.save()
 
-        # Feed card sequences into ComboTracker
         prev = ""
-        for p in replay.placements:
+        for p in gs.replay.placements:
             if prev:
                 COMBO_DB.record(prev, p["card_name"], p["battle_phase"], won)
             prev = p["card_name"]
         COMBO_DB.save()
 
-        # Feed wait events into WaitDB
-        WAIT_DB.record_battle(replay.wait_events)
+        WAIT_DB.record_battle(gs.replay.wait_events)
         WAIT_DB.save()
 
         db_summary = PLACEMENT_DB.summary()
         if db_summary:
-            self.log(f"📊 PlacementDB: {len(db_summary)} keys learned  "
-                     f"| arch={arch}")
+            self.log(f"📊 PlacementDB: {len(db_summary)} keys learned | arch={arch}")
 
-        replay.save_local(result, reward.events, arch)
-        ok = replay.send_to_worker(result, reward.events, arch)
+        gs.replay.save_local(result, engine.reward_scorer.events, arch)
+        ok = gs.replay.send_to_worker(result, engine.reward_scorer.events, arch)
         self.log(
             f"{'✅' if ok else '⚠️'} Replay synced "
-            f"({len(replay.placements)} placements, "
-            f"{len(replay.tower_hp_timeline)} HP snapshots, "
-            f"{len(reward.events)} reward events)"
+            f"({len(gs.replay.placements)} placements, "
+            f"{len(gs.replay.tower_hp_timeline)} HP snapshots, "
+            f"{len(engine.reward_scorer.events)} reward events)"
         )
 
         if result == "win":
@@ -1499,7 +1621,6 @@ class RoyaleBot:
         else:
             self.losses += 1
         self.battles_played += 1
-
         return result == "win"
 
     def run(self):
@@ -1516,10 +1637,13 @@ class RoyaleBot:
         self.screen_h, self.screen_w = first.shape[:2]
         self.log(f"📐 Screen: {self.screen_w}x{self.screen_h}")
 
+        vision = VisionEngine()   # shared across outer-loop ticks
+
         while self.running:
             try:
                 screen = screenshot()
-                state  = detect_screen(screen)
+                visual = vision.analyze(screen)
+                state  = visual.screen_state
 
                 if state == ScreenState.BATTLE:
                     self._battle_confirm += 1
@@ -1529,10 +1653,9 @@ class RoyaleBot:
 
                 elif state == ScreenState.RESULT:
                     self._battle_confirm = 0
-                    btn = find_ok_button(screen)
-                    if btn:
-                        self.log(f"👆 Dismiss result at {btn}")
-                        tap(*btn)
+                    if visual.ok_button:
+                        self.log(f"👆 Dismiss result at {visual.ok_button}")
+                        tap(*visual.ok_button)
                         time.sleep(0.8)
                     else:
                         time.sleep(0.2)
@@ -1541,7 +1664,6 @@ class RoyaleBot:
                     self._battle_confirm = 0
                     self.log("🏠 Home — tapping Battle")
                     self.find_and_tap_battle(screen)
-                    # Poll until the battle loads — no blind sleep
                     self.log("⏳ Waiting for battle...")
                     _mm_start = time.time()
                     while self.running and time.time() - _mm_start < 60:
@@ -1549,10 +1671,7 @@ class RoyaleBot:
                         if is_in_battle(scr):
                             self.log("⚔️ Battle started!")
                             break
-                        if is_matchmaking(scr):
-                            time.sleep(0.5)
-                        else:
-                            time.sleep(0.2)
+                        time.sleep(0.5 if is_matchmaking(scr) else 0.2)
 
                 elif state == ScreenState.MATCHMAKING:
                     self._battle_confirm = 0
@@ -1563,7 +1682,7 @@ class RoyaleBot:
                     self._battle_confirm = 0
                     time.sleep(0.3)
 
-                else:  # ScreenState.UNKNOWN
+                else:
                     self._battle_confirm = 0
                     self.log("🔍 Unknown screen — debug screenshot saved")
                     save_screenshot(r"C:\debug_screen.png")
