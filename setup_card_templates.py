@@ -5,7 +5,7 @@ Run once on the VPS to populate C:\\templates\\cards\\ with named card icon PNGs
 Usage:
     python C:\\setup_card_templates.py
 
-It walks C:\\TKH and C:\\py-clash-bot looking for PNG files whose names
+It walks C:\\cr-api-assets and C:\\py-clash-bot looking for PNG files whose names
 fuzzy-match a Clash Royale card name, then copies them (renamed) to
 C:\\templates\\cards\\<Card Name>.png.
 
@@ -17,7 +17,7 @@ import os
 import re
 import shutil
 
-SEARCH_DIRS = [r"C:\TKH", r"C:\py-clash-bot"]
+SEARCH_DIRS = [r"C:\cr-api-assets", r"C:\py-clash-bot"]
 OUT_DIR     = r"C:\templates\cards"
 
 # All card names the bot knows about (keep in sync with CARD_TYPES in the bot).

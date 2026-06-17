@@ -7,8 +7,8 @@ import shutil
 REPOS = [
     ("https://github.com/pyclashbot/py-clash-bot/archive/HEAD.zip",
      "C:\\py-clash-bot"),
-    ("https://github.com/jlaiii/TKH/archive/HEAD.zip",
-     "C:\\TKH"),
+    ("https://github.com/royaleapi/cr-api-assets/archive/HEAD.zip",
+     "C:\\cr-api-assets"),
 ]
 TEMPLATES_DIR = "C:\\templates"
 
